@@ -1,10 +1,10 @@
--- fenti | Obsidian UI (Information, Players, Fishing, Teleport, Saints, D4C farm, NPCs, Aura, Config — no module picker)
+-- fenti | Obsidian UI (Information, Players, Fishing, Teleport, Saints, D4C farm, Aimbot, NPCs, Aura, Config — no module picker)
 --
 -- HOW TO NAVIGATE THIS FILE
 --   Use your editor search (Ctrl+F) on the tag in the first column — each major block starts with the same tag in a section header.
 --
 --   TAG          WHAT LIVEs THERE
---   [FENTI-00·loader] AC API: inject _G.fentiAC externally (no default HttpGet in hub — obfuscation-friendly)
+--   [FENTI-00·loader] AC module — HttpGet + loadstring from default GitHub raw (override _G.FENTI_AC_MODULE_URL)
 --   [FENTI-01]   Bootstrap + Potassium gate
 --   [FENTI-02B]  Module picker UI (what features load)
 --   [FENTI-02C]  Obsidian Library load + TextService patch
@@ -30,64 +30,80 @@
 --   [FENTI-18]   Chest / corpse / saints farm (_G.FentiFarm IIFE)
 --   [FENTI-20]   Webhook
 --   [FENTI-21]   Serverhop
---   [FENTI-22]   Obsidian UI: Information → Players → Fishing → Teleport → Saints → D4C farm → NPCs → Aura → Config
+--   [FENTI-22]   Obsidian UI: Information → Players → Fishing → Teleport → Saints → D4C farm → Aimbot → NPCs → Aura → Config
 --   [FENTI-23]   Post-UI startup notify
 --
 -- NOTE: Luau limits ~200 locals per function prototype — plain `do` still counts toward the main chunk; use (function() … end)().
--- AC bypass (external — recommended for weak obfuscators / minifiers):
---   Before loading this hub, your key script should load the AC module and set:
---     _G.fentiAC = { loaded = true, source = "inject", api = { earlyPass, registerModule8, destroyStrike, stripACLIInFolder, setupStrikeWatch, lateInit } }
---   If missing, hub uses no-op stubs and still runs (no Strike strip / lateInit hooks).
--- Optional in-script fetch (not default): _G.FENTI_FETCH_AC_MODULE_URL = "https://…" uses prelude fentiHttpGet + fentiLoadstringRun.
--- Tunables (read by real AC module): FENTI_SAFE_AC, FENTI_ENABLE_MODULE8, FENTI_ENABLE_ADONIS_GC, FENTI_TREE_DESTROY_PASS, etc.
+-- AC bypass (required): hub always fetches the module via prelude HttpGet + loadstring.
+--   Override URL only: _G.FENTI_AC_MODULE_URL = "https://raw.githubusercontent.com/…/your_ac.lua" (non-empty string before run).
+--   If HttpGet fails or the chunk is invalid, the hub stops (warn + return). No stub / no inject-only path.
+-- AC module: _G.FENTI_AC_SILENT = true skips the success print in fenti_ac_bypass.lua (optional).
+-- Tunables (read by AC module): FENTI_SAFE_AC, FENTI_ENABLE_MODULE8, FENTI_ENABLE_ADONIS_GC, FENTI_TREE_DESTROY_PASS, etc.
 --
--- OBFUSCATION (some bundlers): line numbers in errors point into the bundled blob, not this source.
---   getgenv may require a stack arg — prelude tries (0)–(3), (), then (coroutine.running()).
---   • Whitelist executor + Roblox globals (do not rename/localize): game workspace task Players Enum typeof pcall xpcall
---     loadstring identifyexecutor getconnections fireproximityprompt firesignal cloneref setclipboard writefile readfile
---     isfile makefolder hookmetamethod hookfunction newcclosure getnamecallmethod checkcaller getgc getrawmetatable
---     Drawing http_request request syn fluxus http VirtualInputManager
---   • Keep game:GetService("Name") service strings readable, or decrypt must run before any GetService.
---   • Prefer “rename/minify” over VM obfuscation if execution fails; test a tiny obfuscated snippet first.
---   • Luraph (lura.ph): use Luau/Roblox target if offered; preserve executor + Roblox globals (see list above).
---     Large hubs (~300kB+) may hit plan/size/token limits — try minified copy or strip this header for a test job.
---     Limitations doc: https://lura.ph/dashboard/documents/limitations (requires dashboard login).
+-- OBFUSCATION: after bootstrap, prelude resolves APIs via rawget(_G, …). Iron Brew: whitelist loadstring load getgenv getrenv (and syn/http if you need request fallback).
 
 -- [FENTI-prelude] Loaders / obfuscators sometimes set globals to booleans; calling them → "attempt to call a boolean value".
 -- Also: never do loadstring(x)() without checking type(chunk) == "function" (chunk can be false in some envs).
+-- Many executors expose loadstring/getgenv as true globals but not as _G fields — mirror once so rawget paths work (unobfuscated + obfuscated).
 do
     (function()
         local g = _G
+        pcall(function()
+            local ls = loadstring
+            if type(ls) == "function" and rawget(g, "loadstring") == nil then rawset(g, "loadstring", ls) end
+        end)
+        pcall(function()
+            local ld = load
+            if type(ld) == "function" and rawget(g, "load") == nil then rawset(g, "load", ld) end
+        end)
+        pcall(function()
+            local gg = getgenv
+            if type(gg) == "function" and rawget(g, "getgenv") == nil then rawset(g, "getgenv", gg) end
+        end)
+        pcall(function()
+            local gr = getrenv
+            if type(gr) == "function" and rawget(g, "getrenv") == nil then rawset(g, "getrenv", gr) end
+        end)
+        pcall(function()
+            local s = syn
+            if type(s) == "table" and type(rawget(g, "syn")) ~= "table" then rawset(g, "syn", s) end
+        end)
+        pcall(function()
+            local h = http
+            if type(h) == "table" and type(rawget(g, "http")) ~= "table" then rawset(g, "http", h) end
+        end)
+        pcall(function()
+            local hr = http_request
+            if type(hr) == "function" and rawget(g, "http_request") == nil then rawset(g, "http_request", hr) end
+        end)
+        pcall(function()
+            local rq = request
+            if type(rq) == "function" and rawget(g, "request") == nil then rawset(g, "request", rq) end
+        end)
         if type(rawget(g, "identifyexecutor")) == "boolean" then
             g.identifyexecutor = function() return "Unknown" end
         end
-        -- Some runtimes: getgenv() may require a stack level; bare getgenv() → "missing argument #1".
+        local function fentiEnvAccessor(name)
+            return rawget(g, name)
+        end
+        -- Strict getgenv: never call getgenv() with no args; only getgenv(0..7) or getgenv(thread) inside pcall.
         local function fentiTryExecutorEnvTable(envFn)
             if type(envFn) ~= "function" then return nil end
-            -- Bare envFn() may error; try stack indices first.
-            local attempts = {
-                function() return envFn(0) end,
-                function() return envFn(1) end,
-                function() return envFn(2) end,
-                function() return envFn(3) end,
-                function() return envFn() end,
-            }
-            for _, run in ipairs(attempts) do
-                local ok, t = pcall(run)
+            for level = 0, 7 do
+                local ok, t = pcall(function()
+                    return envFn(level)
+                end)
                 if ok and type(t) == "table" then return t end
             end
             local th = coroutine.running()
             if th then
-                local ok5, t5 = pcall(function()
+                local ok2, t2 = pcall(function()
                     return envFn(th)
                 end)
-                if ok5 and type(t5) == "table" then return t5 end
+                if ok2 and type(t2) == "table" then return t2 end
             end
             return nil
         end
-        -- Exposed for nested IIFEs (e.g. proximity) — never call bare getgenv()/getrenv() on strict executors.
-        g.fentiTryExecutorEnvTable = fentiTryExecutorEnvTable
-        -- Key loaders often sandbox _G so loadstring is not here; real executor still exposes it on getgenv/getrenv.
         local function fentiPickCompiler(env)
             if type(env) ~= "table" then return nil end
             local ls = rawget(env, "loadstring")
@@ -99,27 +115,40 @@ do
         local function fentiResolveCompiler()
             local c = fentiPickCompiler(g)
             if c then return c end
-            if type(shared) == "table" then
-                c = fentiPickCompiler(shared)
+            local sh = rawget(g, "shared")
+            if type(sh) == "table" then
+                c = fentiPickCompiler(sh)
                 if c then return c end
             end
             do
-                local ge = fentiTryExecutorEnvTable(getgenv)
-                if ge then
-                    c = fentiPickCompiler(ge)
-                    if c then return c end
+                local gg = fentiEnvAccessor("getgenv")
+                if type(gg) == "function" then
+                    local ge = fentiTryExecutorEnvTable(gg)
+                    if ge then
+                        c = fentiPickCompiler(ge)
+                        if c then return c end
+                    end
                 end
             end
             do
-                local re = fentiTryExecutorEnvTable(getrenv)
-                if re then
-                    c = fentiPickCompiler(re)
-                    if c then return c end
+                local gr = fentiEnvAccessor("getrenv")
+                if type(gr) == "function" then
+                    local re = fentiTryExecutorEnvTable(gr)
+                    if re then
+                        c = fentiPickCompiler(re)
+                        if c then return c end
+                    end
                 end
+            end
+            do
+                local ok, ls = pcall(function() return loadstring end)
+                if ok and type(ls) == "function" then return ls end
+                local ok2, ld = pcall(function() return load end)
+                if ok2 and type(ld) == "function" then return ld end
             end
             return nil
         end
-        -- game:HttpGet is often blocked in sandboxes / some games; syn.request-style APIs still work.
+        -- HttpGet first; fallbacks use rawget(_G, …) after bootstrap mirrors above.
         local function fentiPickRequest(env)
             if type(env) ~= "table" then return nil end
             local synr = rawget(env, "syn")
@@ -135,22 +164,29 @@ do
         local function fentiResolveRequest()
             local r = fentiPickRequest(g)
             if r then return r end
-            if type(shared) == "table" then
-                r = fentiPickRequest(shared)
+            local sh = rawget(g, "shared")
+            if type(sh) == "table" then
+                r = fentiPickRequest(sh)
                 if r then return r end
             end
             do
-                local ge = fentiTryExecutorEnvTable(getgenv)
-                if ge then
-                    r = fentiPickRequest(ge)
-                    if r then return r end
+                local gg = fentiEnvAccessor("getgenv")
+                if type(gg) == "function" then
+                    local ge = fentiTryExecutorEnvTable(gg)
+                    if ge then
+                        r = fentiPickRequest(ge)
+                        if r then return r end
+                    end
                 end
             end
             do
-                local re = fentiTryExecutorEnvTable(getrenv)
-                if re then
-                    r = fentiPickRequest(re)
-                    if r then return r end
+                local gr = fentiEnvAccessor("getrenv")
+                if type(gr) == "function" then
+                    local re = fentiTryExecutorEnvTable(gr)
+                    if re then
+                        r = fentiPickRequest(re)
+                        if r then return r end
+                    end
                 end
             end
             return nil
@@ -185,7 +221,7 @@ do
             end
             local ls = fentiResolveCompiler()
             if type(ls) ~= "function" then
-                warn("[fenti] No compiler (loadstring/load) on _G, getgenv(), or getrenv() — cannot load " .. tag .. ". Allow loadstring in your key script sandbox.")
+                warn("[fenti] No loadstring/load — executor did not expose compiler APIs (cannot load " .. tag .. ").")
                 return nil
             end
             local chunkName = "fenti_" .. tag:gsub("[^%w_]", "_")
@@ -219,58 +255,34 @@ do
     end)()
     end
     
-    -- [FENTI-00·loader] AC: no default HttpGet/loadstring (weak obfuscators + strict getgenv break on bundled AC fetch).
-    -- Inject _G.fentiAC before hub, or set _G.FENTI_FETCH_AC_MODULE_URL for optional same-process fetch.
+    -- [FENTI-00·loader] AC module — always HttpGet + loadstring (default GitHub raw). Hub does not start without it.
     local FENTI_AC_REQUIRED_API = { "earlyPass", "registerModule8", "destroyStrike", "stripACLIInFolder", "setupStrikeWatch", "lateInit" }
-    local function fentiAcStubApi()
-        local n = function() end
-        return {
-            earlyPass = n,
-            registerModule8 = n,
-            destroyStrike = n,
-            stripACLIInFolder = n,
-            setupStrikeWatch = n,
-            lateInit = n,
-        }
-    end
-    local function fentiAcApiComplete(api)
-        if type(api) ~= "table" then return false end
-        for _, need in ipairs(FENTI_AC_REQUIRED_API) do
-            if type(api[need]) ~= "function" then return false end
-        end
-        return true
-    end
-    local fentiAC = rawget(_G, "fentiAC")
-    local acOk = type(fentiAC) == "table" and fentiAC.loaded == true and fentiAcApiComplete(fentiAC.api)
-    if not acOk then
-        local fetchUrl = rawget(_G, "FENTI_FETCH_AC_MODULE_URL")
-        if type(fetchUrl) == "string" and #fetchUrl > 8 and _G.fentiHttpGet and _G.fentiLoadstringRun then
-            local tryLoad, tryErr = pcall(function()
-                local src = _G.fentiHttpGet(fetchUrl)
-                if type(src) ~= "string" or #src < 80 then error("short_or_empty_http") end
-                local api = _G.fentiLoadstringRun(src, "fenti.AC")
-                if type(api) ~= "table" then error("return_not_table") end
-                for _, need in ipairs(FENTI_AC_REQUIRED_API) do
-                    if type(api[need]) ~= "function" then error("missing_api:" .. need) end
-                end
-                fentiAC = { loaded = true, api = api, err = nil, source = "http" }
-            end)
-            acOk = tryLoad and type(fentiAC) == "table" and fentiAC.loaded == true
-            if not tryLoad then
-                fentiAC = { loaded = false, api = nil, err = tostring(tryErr), source = "http_fail" }
+    local FENTI_AC_MODULE_URL_DEFAULT = "https://raw.githubusercontent.com/dfgkl5kubnfik5gchlindfg45/DKLNBVJKKKWEJKHCVUUCIVBUNOIUADSRT/refs/heads/main/a.lua"
+    local _fentiAcUrlOverride = rawget(_G, "FENTI_AC_MODULE_URL")
+    local FENTI_AC_MODULE_URL = type(_fentiAcUrlOverride) == "string" and #_fentiAcUrlOverride > 0 and _fentiAcUrlOverride or FENTI_AC_MODULE_URL_DEFAULT
+    local fentiAC = { loaded = false, api = nil, err = nil, source = "none" }
+    if not _G.fentiHttpGet or not _G.fentiLoadstringRun then
+        fentiAC.err = "Prelude missing fentiHttpGet / fentiLoadstringRun"
+    else
+        local okLoad, errLoad = pcall(function()
+            local src = _G.fentiHttpGet(FENTI_AC_MODULE_URL)
+            if type(src) ~= "string" or #src < 80 then error("short_or_empty_http") end
+            local api = _G.fentiLoadstringRun(src, "fenti.AC")
+            if type(api) ~= "table" then error("return_not_table") end
+            for _, need in ipairs(FENTI_AC_REQUIRED_API) do
+                if type(api[need]) ~= "function" then error("missing_api:" .. need) end
             end
-        end
-    end
-    if not acOk then
-        fentiAC = {
-            loaded = true,
-            api = fentiAcStubApi(),
-            err = "stub — inject _G.fentiAC from external AC script or set _G.FENTI_FETCH_AC_MODULE_URL",
-            source = "stub",
-        }
-        warn("[fenti] AC: " .. tostring(fentiAC.err))
+            fentiAC.api = api
+            fentiAC.loaded = true
+            fentiAC.source = "http"
+        end)
+        if not okLoad then fentiAC.err = tostring(errLoad) end
     end
     _G.fentiAC = fentiAC
+    if not fentiAC.loaded then
+        warn("[fenti] AC module required — " .. tostring(fentiAC.err))
+        return
+    end
     pcall(function() fentiAC.api.earlyPass() end)
     
     -- [FENTI-00] Module 8 flag (implementation lives in AC module via registerModule8)
@@ -279,6 +291,12 @@ do
     local FENTI_MODULE8_ENABLED = not _fentiStrictPlace and not _fentiSafeAc and rawget(_G, "FENTI_DISABLE_MODULE8") ~= true
         and rawget(_G, "FENTI_ENABLE_MODULE8") == true
     pcall(function() fentiAC.api.registerModule8(FENTI_MODULE8_ENABLED) end)
+    -- Before K-gate / RS watchers (string.char — weak obfuscators won't see plaintext folder name).
+    local FENTI_RS_STRIKE_NAME = string.char(83, 116, 114, 105, 107, 101)
+    local FENTI_RS_STRIKE_NAME_LOWER = string.char(115, 116, 114, 105, 107, 101)
+    local FENTI_CLASS_REMOTE_FUNCTION = string.char(82, 101, 109, 111, 116, 101, 70, 117, 110, 99, 116, 105, 111, 110)
+    local FENTI_CLASS_REMOTE_EVENT = string.char(82, 101, 109, 111, 116, 101, 69, 118, 101, 110, 116)
+    local FENTI_CLASS_UNRELIABLE_REMOTE_EVENT = string.char(85, 110, 114, 101, 108, 105, 97, 98, 108, 101, 82, 101, 109, 111, 116, 101, 69, 118, 101, 110, 116)
     
     -- ----------------------------------------------------------------------------
     -- [FENTI-01] 1. BOOTSTRAP
@@ -381,14 +399,14 @@ do
         klog("BYPASS_PHASE")
     
         pcall(function()
-            local s = RStorage:FindFirstChild("Strike", true)
+            local s = RStorage:FindFirstChild(FENTI_RS_STRIKE_NAME, true)
             if not s then return end
             if _G.fentiAC and _G.fentiAC.loaded and type(_G.fentiAC.api.destroyStrike) == "function" then
                 pcall(_G.fentiAC.api.destroyStrike)
             end
-            s = RStorage:FindFirstChild("Strike", true)
+            s = RStorage:FindFirstChild(FENTI_RS_STRIKE_NAME, true)
             if s then s:Destroy() end
-            klog("Strike_removed")
+            klog("k_RS_folder_cleared")
         end)
         for _, n in ipairs({ "Krypton", "Kripton" }) do
             pcall(function()
@@ -453,7 +471,7 @@ do
             RStorage.ChildAdded:Connect(function(ch)
                 task.defer(function()
                     local ln = string.lower(ch.Name)
-                    if ln == "strike" then pcall(function() ch:Destroy() end); return end
+                    if ln == FENTI_RS_STRIKE_NAME_LOWER then pcall(function() ch:Destroy() end); return end
                     if string.find(ln, "acli", 1, true) or string.find(ln, "adonis", 1, true) then
                         pcall(function() ch:Destroy() end)
                         return
@@ -1451,6 +1469,28 @@ do
     local FENTI_SCRIPT_VERSION = 5
     local BEST_FISHING_SPOT = CFrame.new(-4883, 44.999, -2118)
     local SAFE_ZONE_POS = CFrame.new(0, 50, 0)
+    -- User-defined fishing TP presets (name + CFrame). "Default (hub)" = BEST_FISHING_SPOT.
+    local fentiCustomFishSpotEntries = {}
+    local fentiSelectedFishSpotName = "Default (hub)"
+    local function fentiFishSpotDropdownValues()
+        local v = { "Default (hub)" }
+        for _, e in ipairs(fentiCustomFishSpotEntries) do
+            table.insert(v, e.name)
+        end
+        return v
+    end
+    local function fentiGetFishSpotCFrame()
+        if fentiSelectedFishSpotName == "Default (hub)" or fentiSelectedFishSpotName == "" then
+            return BEST_FISHING_SPOT
+        end
+        for _, e in ipairs(fentiCustomFishSpotEntries) do
+            if e.name == fentiSelectedFishSpotName then
+                return e.cf
+            end
+        end
+        return BEST_FISHING_SPOT
+    end
+    _G.fentiGetFishSpotCFrame = fentiGetFishSpotCFrame
     
     -- ----------------------------------------------------------------------------
     -- [FENTI-06] 6. ALL STATE VARIABLES
@@ -1460,6 +1500,7 @@ do
     local isRunning, fishCaught, chestsOpened = false, 0, 0
     local useBait, autoBuyBait, autoSellFish, autoBuyRod = true, false, false, false
     local autoFishLootChests = false
+    if rawget(_G, "FENTI_FISH_DEBUG") == nil then _G.FENTI_FISH_DEBUG = false end
     -- Chest / TP loop
     local chestFarmEnabled, originalPosition, rootMotionLockConn, tpLoopConnection = false, nil, nil, nil
     local openedChests, totalChestsAtStart = {}, 0
@@ -1588,12 +1629,12 @@ do
     }
     -- Slower saints pickup (fewer AC triggers); default on — disable in Corpse tab for max speed at higher risk.
     local saintsPickupStealth = true
-    -- Optional kill TP to safe before second death for claim; off by default (double kill stacks badly with some flows).
+    -- Optional safe hop before claim (movement TP); off by default.
     local saintsResetBeforeClaim = false
-    -- Full auto: fast spam, instant-prompt on, skip pre-reset; success → kill-TP safe; fail → fish→safe + retry wave.
+    -- Full auto: fast spam, instant-prompt on, skip pre-reset; success → safe hop; fail → fish→safe + retry wave.
     local saintsAllInOne = false
     local saintsEspEnabled = false
-    -- After saints sniper / auto-claim: kill-TP to safe zone immediately; retry if hop fails.
+    -- After saints sniper / auto-claim: soft TP to safe zone; retry if hop fails.
     local saintsSafeAfterClaim = true
     local saintsSafeAfterClaimMaxAttempts = 5
     local saintsClaimPromptRounds = 3
@@ -2355,7 +2396,7 @@ do
     local function uninstallGetMousePosHook()
         pcall(function()
             local getMousePos = Remotes and Remotes:FindFirstChild("GetMousePos")
-            if getMousePos and getMousePos:IsA("RemoteFunction") then
+            if getMousePos and getMousePos:IsA(FENTI_CLASS_REMOTE_FUNCTION) then
                 getMousePos.OnClientInvoke = nil
             end
         end)
@@ -2683,6 +2724,24 @@ do
         studDist = math.max(0, studDist or 0)
         return math.clamp(2.2 + studDist * 0.008, 2.2, 12)
     end
+
+    -- After CharacterAdded: wait until humanoid is alive and HRP exists so respawn snap does not run on a half-loaded rig.
+    local function fentiWaitForRespawnReady(newChar, maxWait)
+        maxWait = maxWait or 15
+        if not newChar or not newChar.Parent then return nil end
+        local t0 = tick()
+        local hum = newChar:WaitForChild("Humanoid", math.min(8, maxWait))
+        if not hum then return nil end
+        while tick() - t0 < maxWait do
+            local root = newChar:FindFirstChild("HumanoidRootPart")
+            if root and root.Parent and hum.Parent and hum.Health > 0 then
+                task.wait(0.2)
+                return root
+            end
+            task.wait(0.05)
+        end
+        return newChar:FindFirstChild("HumanoidRootPart")
+    end
     
     local function respawnTeleportTo(destination, logTag)
         refreshCharacter()
@@ -2696,7 +2755,8 @@ do
         if hum then hum.Health = 0 end
     
         local newChar = player.CharacterAdded:Wait()
-        local newRoot = newChar:WaitForChild("HumanoidRootPart", 10)
+        local newRoot = fentiWaitForRespawnReady(newChar, 15)
+        if not newRoot then newRoot = newChar:WaitForChild("HumanoidRootPart", 10) end
         if not newRoot then banLog("TP", "Teleport failed — no spawn position."); failLogWrite("[TP_FAIL] no HumanoidRootPart after respawn"); return false end
         character = newChar; humanoidRootPart = newRoot
     
@@ -2721,11 +2781,11 @@ do
         return true
     end
     
-    -- Kill + respawn snap: no 0.12s waits, no multi-second pin (for instant chains / fast bypass).
+    -- Respawn snap: no 0.12s waits, no multi-second pin (for instant chains).
     local function respawnTeleportInstant(destination, logTag)
         refreshCharacter()
         if not humanoidRootPart then
-            banLog("TP", "Instant kill-TP cancelled — no HRP.")
+            banLog("TP", "Instant respawn TP cancelled — no HRP.")
             return false
         end
         local destCF = typeof(destination) == "CFrame" and destination or CFrame.new(destination)
@@ -2742,9 +2802,10 @@ do
             end)
         end
         local newChar = player.CharacterAdded:Wait()
-        local newRoot = newChar:WaitForChild("HumanoidRootPart", 10)
+        local newRoot = fentiWaitForRespawnReady(newChar, 15)
+        if not newRoot then newRoot = newChar:WaitForChild("HumanoidRootPart", 10) end
         if not newRoot then
-            banLog("TP", "Instant kill-TP failed — no HRP after respawn [" .. tostring(logTag) .. "]")
+            banLog("TP", "Instant respawn TP failed — no HRP after respawn [" .. tostring(logTag) .. "]")
             return false
         end
         character, humanoidRootPart = newChar, newRoot
@@ -2759,39 +2820,6 @@ do
         return true
     end
     
-    -- Two kill-TPs in a row need a gap: immediate hop2 often fails (HRP / respawn not ready); pcall hid that.
-    do
-    (function()
-        function _G.fentiRespawnTeleportTwoHop(destA, destB, pauseSec, logTag)
-            pauseSec = pauseSec or 0.58
-            logTag = tostring(logTag or "twoHop")
-            if not respawnTeleportInstant(destA, logTag .. "_1") then
-                banLog("TP", "2× kill-TP — first hop failed [" .. logTag .. "]")
-                return false, "first_hop"
-            end
-            task.wait(pauseSec)
-            refreshCharacter()
-            if not humanoidRootPart then
-                task.wait(0.3)
-                refreshCharacter()
-            end
-            if not humanoidRootPart then
-                return false, "no_hrp_before_second"
-            end
-            if not respawnTeleportInstant(destB, logTag .. "_2") then
-                task.wait(0.75)
-                refreshCharacter()
-                if humanoidRootPart and respawnTeleportInstant(destB, logTag .. "_2r") then
-                    return true, nil
-                end
-                banLog("TP", "2× kill-TP — safe hop failed [" .. logTag .. "]")
-                return false, "safe_hop"
-            end
-            return true, nil
-        end
-    end)()
-    end
-    
     pcall(function()
         if HorseControlEvent then
             HorseControlEvent.OnClientEvent:Connect(function(action)
@@ -2802,7 +2830,7 @@ do
     end)
     
     -- ----------------------------------------------------------------------------
-    -- [FENTI-14] 14. TELEPORT (kill TP only for smart + prompt moves; fishing anchor snap separate)
+    -- [FENTI-14] 14. TELEPORT (smart + prompt moves; fishing anchor snap separate)
     -- ----------------------------------------------------------------------------
     -- Must NOT use fishing `isRunning` here — a stale connection stayed idle until fishing started, then fought casts.
     local function lockRootMotion()
@@ -2916,26 +2944,40 @@ do
         patchNearbyPrompts = pnp
     end)()
     
-    local function fentiKillTeleport(destination, logTag)
-        logTag = tostring(logTag or "tp")
-        local instant = true
-        if Toggles and Toggles.BypassInstantPin then
-            instant = Toggles.BypassInstantPin.Value
+    local function fentiSoftTeleportTo(destination, logTag)
+        logTag = tostring(logTag or "softTP")
+        refreshCharacter()
+        if not humanoidRootPart then
+            banLog("TP", "TP cancelled — no HRP [" .. logTag .. "]")
+            return false
         end
-        if instant then
-            respawnTeleportInstant(destination, logTag)
-        else
-            respawnTeleportTo(destination, logTag)
-        end
+        local destCF = typeof(destination) == "CFrame" and destination or CFrame.new(destination)
+        local Rm = RS:FindFirstChild("Remotes")
+        local mov = Rm and Rm:FindFirstChild("ActionRemote")
+        pcall(function()
+            if mov then mov:FireServer("Vault") end
+        end)
+        task.wait(0.08)
+        refreshCharacter()
+        if not humanoidRootPart then return false end
+        pcall(function()
+            humanoidRootPart.CFrame = destCF
+        end)
+        banLog("TP", "TP OK [" .. logTag .. "]")
+        return true
+    end
+    _G.fentiSoftTeleportTo = fentiSoftTeleportTo
+
+    local function fentiPromptMoveTeleport(destination, logTag)
+        return fentiSoftTeleportTo(destination, logTag)
     end
     local function smartTeleport(destination)
         refreshCharacter()
         if not humanoidRootPart then return end
-        fentiKillTeleport(destination, "smartTP")
+        fentiSoftTeleportTo(destination, "smartTP")
     end
-    -- Prompt / loot: same kill-TP engine as places (die + respawn at target).
     local function fentiPromptTeleport(destination)
-        fentiKillTeleport(destination, "promptTP")
+        fentiPromptMoveTeleport(destination, "promptTP")
     end
     
     -- ----------------------------------------------------------------------------
@@ -2993,31 +3035,12 @@ do
     local _isChestProximityPrompt
     local fentiRadiusPromptStop = false
     (function()
-    local function fentiResolveNativeFireProximityPrompt()
-        local envs = { _G }
-        if type(getgenv) == "function" then
-            local tryEnv = rawget(_G, "fentiTryExecutorEnvTable")
-            local ge = type(tryEnv) == "function" and tryEnv(getgenv) or nil
-            if ge then table.insert(envs, ge) end
-        end
-        for _, env in ipairs(envs) do
-            for _, key in ipairs({ "fireproximityprompt", "FireProximityPrompt" }) do
-                local f = rawget(env, key)
-                if type(f) == "function" then return f end
-            end
-        end
-        return type(fireproximityprompt) == "function" and fireproximityprompt or nil
-    end
-    local function fentiNativeFireProximityBurst(targetPrompt)
-        if not targetPrompt then return end
-        local fpp = fentiResolveNativeFireProximityPrompt()
+    -- rawget(_G, …) so a rename/minify pass cannot break the native prompt API name.
+    local function fentiTryGlobalFireProximityPrompt(p)
+        local fpp = rawget(_G, "fireproximityprompt")
         if type(fpp) ~= "function" then return end
-        local ref = targetPrompt
-        pcall(function() if cloneref then ref = cloneref(targetPrompt) end end)
-        pcall(fpp, ref)
-        pcall(fpp, ref, 0)
-        pcall(fpp, targetPrompt)
-        pcall(fpp, targetPrompt, 0)
+        pcall(fpp, p)
+        pcall(fpp, p, 0)
     end
     local function sfp(prompt)
         if not prompt or not prompt:IsA("ProximityPrompt") then return false end
@@ -3059,7 +3082,7 @@ do
             return true
         end
     
-        fentiNativeFireProximityBurst(prompt)
+        fentiTryGlobalFireProximityPrompt(prompt)
         if tryTriggeredConns() then ok = true end
         if not ok and tryFireSignal() then ok = true end
         if not ok then tryNativeHold(_isXeno or not Support.Proximity) end
@@ -3097,7 +3120,7 @@ do
             prompt.MaxActivationDistance = math.min(FENTI_INSTA_PROMPT_STRETCH, math.max(m, 24))
         end)
         local function burstNative()
-            fentiNativeFireProximityBurst(prompt)
+            fentiTryGlobalFireProximityPrompt(prompt)
         end
         burstNative()
         if typeof(getconnections) == "function" then
@@ -3282,7 +3305,7 @@ do
                 local ents = saintsFolder:FindFirstChild("Entities")
                 if ents then
                     for _, folder in ipairs(ents:GetChildren()) do
-                        if folder.Name ~= lp.Name and folder.Name ~= lp.DisplayName then
+                        if folder.Name ~= lp.Name and folder.Name ~= lp.DisplayName and folder.Name ~= tostring(lp.UserId) then
                             for _, ch in ipairs(folder:GetChildren()) do
                                 if ch:IsA("BasePart") then
                                     pushIfSaintPart(ch)
@@ -3620,6 +3643,11 @@ do
         end
         return RS:FindFirstChild("QTEEvent", true)
     end
+    local function fishDbg(msg)
+        msg = tostring(msg)
+        banLog("FISH", msg)
+        if rawget(_G, "FENTI_FISH_DEBUG") == true then warn("[fenti-fish] " .. msg) end
+    end
     local function hasBait()
         local bp = player:FindFirstChild("Backpack")
         return (bp and bp:FindFirstChild("Bait")) or (player.Character and player.Character:FindFirstChild("Bait")) or false
@@ -3628,20 +3656,23 @@ do
         local bp = player:FindFirstChild("Backpack")
         return (bp and bp:FindFirstChild("FishingRod")) or (player.Character and player.Character:FindFirstChild("FishingRod")) or false
     end
-    local function ensureFishingRodEquipped()
+    -- softOnly: if FishingRod is already the equipped tool, do nothing (avoids EquipTool flicker every “catch” cycle).
+    local function ensureFishingRodEquipped(softOnly)
+        softOnly = softOnly == true
         if not character or not character.Parent or not humanoidRootPart or not humanoidRootPart.Parent then
             refreshCharacter()
         end
         if not character then return end
         local hum = character:FindFirstChildOfClass("Humanoid")
-        local backpack = player:FindFirstChild("Backpack")
-        local rod = character:FindFirstChild("FishingRod")
-        if not rod and backpack then rod = backpack:FindFirstChild("FishingRod") end
-        if not rod then return end
         local equipped = nil
         pcall(function()
             equipped = hum and hum:GetEquippedTool()
         end)
+        if softOnly and equipped and equipped.Name == "FishingRod" then return end
+        local backpack = player:FindFirstChild("Backpack")
+        local rod = character:FindFirstChild("FishingRod")
+        if not rod and backpack then rod = backpack:FindFirstChild("FishingRod") end
+        if not rod then return end
         if equipped == rod then return end
         if rod.Parent ~= character then
             rod.Parent = character
@@ -3720,7 +3751,7 @@ do
         local throwDistance = math.random(60, 100)
         return playerPos + rotatedDirection * throwDistance
     end
-    -- Working-game pattern: HRP forward ~20 studs (same idea as AutoFish3) — fast, reliable bobber, no long “hang” after cast.
+    -- Working-game pattern: HRP forward ~20 studs (optional alt cast).
     local function getShortCastAim()
         if humanoidRootPart then
             return (humanoidRootPart.CFrame * CFrame.new(0, 0, -20)).Position
@@ -3730,6 +3761,24 @@ do
             return (holdCF * CFrame.new(0, 0, -20)).Position
         end
         return Vector3.zero
+    end
+    -- Fishing Bot v4 / bridgewestern style: HRP facing, 15° spread, 60–100 studs, slight Y jitter (matches working cast).
+    local function legacyGetRandomVector()
+        if not character or not character.Parent or not humanoidRootPart then
+            refreshCharacter()
+        end
+        local holdCF = rawget(_G, "fentiFishingHoldCF")
+        local pos = (humanoidRootPart and humanoidRootPart.Position)
+            or (typeof(holdCF) == "CFrame" and holdCF.Position)
+        if not pos then return Vector3.zero end
+        local facing = (humanoidRootPart and humanoidRootPart.CFrame.LookVector)
+            or (typeof(holdCF) == "CFrame" and holdCF.LookVector)
+            or Vector3.new(0, 0, -1)
+        local spread = math.rad(15)
+        local dir = (CFrame.new(Vector3.zero, facing) * CFrame.Angles(math.random() * spread * 0.5, (math.random() - 0.5) * spread * 2, 0)).LookVector
+        local dist = math.random(60, 100)
+        local target = pos + dir * dist
+        return Vector3.new(target.X, pos.Y - math.random(1, 5), target.Z)
     end
     -- Keep spring constraints off briefly after Primary so AlignPosition does not fight the new line/bobber (fixes 2nd+ cast “no bobber” loops).
     local function fentiArmCastPhysicsFreeWindow(duration)
@@ -3744,22 +3793,23 @@ do
             _G.fentiCastingUnanchor = nil
         end)
     end
+    -- Cast: bait + 0.3s pause, then camera cone 60–100 studs (low hitch vs short HRP-only cast).
     local function castRod()
-        local function releaseCast()
-            _G.fentiCastingUnanchor = nil
-        end
+        if Labels.Status then Labels.Status:SetText("Status: Casting...") end
         if not character or not character.Parent or not humanoidRootPart then
             refreshCharacter()
         end
         if not humanoidRootPart then return nil end
         ensureFishingRodEquipped()
         if not humanoidRootPart then return nil end
+        useBaitIfEnabled()
+        task.wait(0.3)
         local r = getUseToolRemote()
         if not r then warn("[fenti] Remotes.UseTool missing"); return nil end
-        local aim = getShortCastAim()
+        local aim = getRandomVector()
         if aim == Vector3.zero then return nil end
         local throwLen = (aim - humanoidRootPart.Position).Magnitude
-        if throwLen < 4 or throwLen > 120 then return nil end
+        if throwLen < 8 or throwLen > 500 then return nil end
         r:FireServer("FishingRod", "Primary", aim)
         fentiArmCastPhysicsFreeWindow(0.55)
         return aim
@@ -3840,7 +3890,7 @@ do
     -- Do not set HumanoidRootPart.Anchored here — it causes a visible hitch and can desync/cancel the fishing line client-side.
     local function completeBiteMinigame()
         if Labels.Status then Labels.Status:SetText("Status: Bite — reel, wait minigame…") end
-        banLog("FISH", "Bite — Primary then wait UI → QTEEvent")
+        fishDbg("completeBite: start (Primary reel → wait UI / QTE)")
         refreshCharacter()
         local r = getUseToolRemote()
         local q = getQTERemote()
@@ -3891,27 +3941,12 @@ do
         while qteInProgress and isRunning and (tick() - qt0) < 22 do
             task.wait(0.05)
         end
+        if isRunning then unlockRootMotion() end
         _G.fentiSuppressFishHold = false
         fentiArmCastPhysicsFreeWindow(0.4)
+        fishDbg("completeBite: end")
     end
 
-    local function legacyGetRandomVector()
-        if not character or not character.Parent or not humanoidRootPart then
-            refreshCharacter()
-        end
-        local holdCF = rawget(_G, "fentiFishingHoldCF")
-        local pos = (humanoidRootPart and humanoidRootPart.Position)
-            or (typeof(holdCF) == "CFrame" and holdCF.Position)
-        if not pos then return Vector3.zero end
-        local facing = (humanoidRootPart and humanoidRootPart.CFrame.LookVector)
-            or (typeof(holdCF) == "CFrame" and holdCF.LookVector)
-            or Vector3.new(0, 0, -1)
-        local spread = math.rad(15)
-        local dir = (CFrame.new(Vector3.zero, facing) * CFrame.Angles(math.random() * spread * 0.5, (math.random() - 0.5) * spread * 2, 0)).LookVector
-        local dist = math.random(60, 100)
-        local target = pos + dir * dist
-        return Vector3.new(target.X, pos.Y - math.random(1, 5), target.Z)
-    end
     local function legacyCastRod()
         if Labels.Status then Labels.Status:SetText("Status: Casting...") end
         if not character or not character.Parent or not humanoidRootPart then
@@ -3927,6 +3962,7 @@ do
             return
         end
         r:FireServer("FishingRod", "Primary", legacyGetRandomVector())
+        fentiArmCastPhysicsFreeWindow(0.55)
     end
 
     _G.fentiGetQTERemote = getQTERemote
@@ -3945,6 +3981,8 @@ do
         completeBiteMinigame = completeBiteMinigame,
         legacyCastRod = legacyCastRod,
         getQTERemote = getQTERemote,
+        armCastPhysicsFreeWindow = fentiArmCastPhysicsFreeWindow,
+        fishDbg = fishDbg,
     }
     end)()
 
@@ -4016,23 +4054,19 @@ do
     do
     (function()
         local FENTI_FISH_BOBBER_RADIUS = 120
-        -- Ignore bite heuristics briefly after attach (avoids cast splash firing reel).
-        local BITE_ARM_SECONDS = 2.0
+        -- Bite: armed Sound (ignore splash ~1.55s) + filter; ChildAdded + DescendantAdded; then completeBiteMinigame.
         local function waitForFishBite(fishingPart)
             if not fishingPart or not fishingPart.Parent then return false end
-            local timeout, startTime, fishDetected = 50, tick(), false
-            local biteOnce = false
-            local lastPlayingScan = 0
+            local fishDbgLocal = type(_G.fentiFish.fishDbg) == "function" and _G.fentiFish.fishDbg or function() end
+            local BITE_ARM_SEC = 1.55
+            local timeout, startTime = 50, tick()
+            local fishDone, biteStarted = false, false
             local soundConn, descConn
-            local function biteArmed()
-                return (tick() - startTime) >= BITE_ARM_SECONDS
-            end
-            local function disconnectListeners()
+            local function disconnectSound()
                 if soundConn and soundConn.Connected then soundConn:Disconnect() end
                 if descConn and descConn.Connected then descConn:Disconnect() end
                 soundConn, descConn = nil, nil
             end
-            -- Light filter only: mute = ignore; long looped ambience = ignore. Real bite SFX vary a lot per game.
             local function soundOkForBite(s)
                 if not s or not s:IsA("Sound") then return false end
                 if s.Volume <= 0 then return false end
@@ -4042,36 +4076,43 @@ do
                 end
                 return true
             end
-            local function onBiteSound()
-                if not biteArmed() or biteOnce or not isRunning then return end
-                biteOnce = true
-                disconnectListeners()
-                if Labels.Status then Labels.Status:SetText("Status: Fish bite — reeling…") end
-                _G.fentiBiteResolveInProgress = true
-                pcall(function() _G.fentiFish.completeBiteMinigame() end)
-                _G.fentiBiteResolveInProgress = false
-                fishDetected = true
+            local function beginBiteSequence()
+                if biteStarted or not isRunning then return end
+                biteStarted = true
+                disconnectSound()
+                task.spawn(function()
+                    if Labels.Status then Labels.Status:SetText("Status: Bite — reel & QTE…") end
+                    fishDbgLocal("waitBite: bite confirmed → completeBiteMinigame")
+                    pcall(function() _G.fentiFish.completeBiteMinigame() end)
+                    fishDone = true
+                end)
             end
             local function scheduleBiteFromSound(snd)
+                if not soundOkForBite(snd) then return end
                 task.spawn(function()
-                    while isRunning and fishingPart.Parent and not biteOnce and not biteArmed() do
+                    while isRunning and fishingPart.Parent and not biteStarted and (tick() - startTime) < BITE_ARM_SEC do
                         task.wait(0.05)
                     end
-                    if biteOnce or not isRunning or not fishingPart.Parent then return end
+                    if biteStarted or not isRunning or not fishingPart.Parent then return end
+                    if not soundOkForBite(snd) then return end
                     if snd.Parent and snd:IsA("Sound") and snd.IsPlaying and soundOkForBite(snd) then
-                        onBiteSound()
+                        fishDbgLocal("waitBite: sound playing (post-arm)")
+                        beginBiteSequence()
                         return
                     end
-                    for _ = 1, 50 do
-                        if biteOnce or not isRunning then return end
+                    for _ = 1, 56 do
+                        if biteStarted or not isRunning then return end
+                        if not fishingPart.Parent then return end
                         if snd.Parent and snd:IsA("Sound") and snd.IsPlaying and soundOkForBite(snd) then
-                            onBiteSound()
+                            fishDbgLocal("waitBite: sound started (polled)")
+                            beginBiteSequence()
                             return
                         end
                         task.wait(0.05)
                     end
                 end)
             end
+            fishDbgLocal("waitBite: listen ChildAdded+DescendantAdded on bobber")
             soundConn = fishingPart.ChildAdded:Connect(function(child)
                 if child:IsA("Sound") then scheduleBiteFromSound(child) end
             end)
@@ -4079,22 +4120,17 @@ do
                 if child:IsA("Sound") then scheduleBiteFromSound(child) end
             end)
             while isRunning and (tick() - startTime) < timeout do
-                if not fishingPart.Parent then break end
-                if not biteOnce and biteArmed() and (tick() - lastPlayingScan) >= 0.45 then
-                    lastPlayingScan = tick()
-                    for _, s in ipairs(fishingPart:GetDescendants()) do
-                        if s:IsA("Sound") and soundOkForBite(s) and s.IsPlaying then
-                            onBiteSound()
-                            break
-                        end
-                    end
+                if fishDone then
+                    disconnectSound()
+                    return true
                 end
-                if fishDetected then disconnectListeners(); return true end
-                task.wait(0.09)
+                if not fishingPart.Parent then disconnectSound(); return false end
+                task.wait(0.1)
             end
-            disconnectListeners()
-            if Labels.Status and not fishDetected then Labels.Status:SetText("Status: No bite (timeout)") end
-            return fishDetected
+            disconnectSound()
+            if Labels.Status and not fishDone then Labels.Status:SetText("Status: No bite (timeout)") end
+            fishDbgLocal("waitBite: timeout fishDone=" .. tostring(fishDone))
+            return fishDone
         end
         local function fireFishingBobberPrompt(fishingPart)
             if not fishingPart or not fishingPart.Parent then return false end
@@ -4117,7 +4153,8 @@ do
         local function fentiFishingPromptAssistTick(anchorPosition)
             pcall(function()
                 local lc = rawget(_G, "fentiLastCastClock")
-                if type(lc) == "number" and (os.clock() - lc) < 0.7 then return end
+                -- Stay off bobber/fish prompts until line lands (short gate caused stacked Primary / “triple cast” feel).
+                if type(lc) == "number" and (os.clock() - lc) < 2.65 then return end
                 local lp = Players.LocalPlayer
                 pcall(function() if cloneref then lp = cloneref(lp) end end)
                 local hrp = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
@@ -4253,6 +4290,27 @@ do
         return bestPart
     end
 
+    -- Red bobber (~255,60,60) within range — same idea as AutoFish3.
+    local function findRedBobberPartNear(playerPos, maxDist)
+        if not playerPos then return nil end
+        maxDist = maxDist or 100
+        local maxSq = maxDist * maxDist
+        local best, bestSq = nil, maxSq
+        for _, p in ipairs(workspace:GetChildren()) do
+            if p.Name == "Part" and p:IsA("BasePart") then
+                local c = p.Color
+                if c.R > 0.92 and c.G < 0.35 and c.B < 0.35 then
+                    local d = p.Position - playerPos
+                    local dsq = d:Dot(d)
+                    if dsq <= maxSq and dsq < bestSq then
+                        best, bestSq = p, dsq
+                    end
+                end
+            end
+        end
+        return best
+    end
+
     _G.fentiFishingLoop = function()
         refreshCharacter()
         if not humanoidRootPart then return end
@@ -4325,51 +4383,80 @@ do
         _G.fentiSuppressFishHold = false
         local castAttempts, castSuccesses = 0, 0
         local lastCastAim = nil
+        local noBobberStreak = 0
+        -- One FireServer("FishingRod","Primary", aim) per loop; then wait for bobber — no back-to-back casts.
+        local FENTI_POST_CAST_SETTLE = 2.85
         while isRunning do
             castAttempts = castAttempts + 1
             _G.fentiFishAssistCastGen = (rawget(_G, "fentiFishAssistCastGen") or 0) + 1
             if not character or not character.Parent or not humanoidRootPart or not humanoidRootPart.Parent then
                 refreshCharacter()
             end
-            lastCastAim = _G.fentiFish.castRod()
+            if noBobberStreak >= 4 then
+                noBobberStreak = 0
+                if Labels.Status then Labels.Status:SetText("Status: Long cast…") end
+                pcall(function() _G.fentiFish.fishDbg("loop: long cast") end)
+                lastCastAim = _G.fentiFish.castRodLong()
+            else
+                pcall(function() _G.fentiFish.fishDbg("loop: cast attempt #" .. castAttempts) end)
+                lastCastAim = _G.fentiFish.castRod()
+            end
             _G.fentiLastFishCastAim = lastCastAim
+            task.wait(FENTI_POST_CAST_SETTLE)
             local playerPos = (humanoidRootPart and humanoidRootPart.Position) or anchorCF.Position
-            local fishingPart = nil
-            local bobberSearchT0 = tick()
-            local bobberSearchUntil = bobberSearchT0 + 2.5
-            local didDeepBobberScan = false
-            while isRunning and tick() < bobberSearchUntil do
-                playerPos = (humanoidRootPart and humanoidRootPart.Position) or playerPos
-                -- Shallow scan every pass; deep GetDescendants at most once (~1s after cast) — was freezing every 0.16s.
-                local useDeep = not didDeepBobberScan and (tick() - bobberSearchT0) >= 0.95
-                if useDeep then didDeepBobberScan = true end
-                fishingPart = findBestFishingBobberPart(playerPos, 130, lastCastAim, useDeep)
-                if fishingPart then break end
-                task.wait(0.4)
+            local fishingPart = findRedBobberPartNear(playerPos, 100)
+            if not fishingPart then
+                fishingPart = findBestFishingBobberPart(playerPos, 130, lastCastAim, false)
+            end
+            if not fishingPart then
+                task.wait(1.15)
                 refreshCharacter()
+                playerPos = (humanoidRootPart and humanoidRootPart.Position) or playerPos
+                fishingPart = findBestFishingBobberPart(playerPos, 130, lastCastAim, true)
             end
             if fishingPart then
+                noBobberStreak = 0
                 castSuccesses = castSuccesses + 1
-                if Labels.Status then Labels.Status:SetText("Status: Part found, waiting for bite...") end
+                if Labels.Status then Labels.Status:SetText("Status: Bobber found, waiting…") end
+                pcall(function() _G.fentiFish.fishDbg("loop: bobber locked, waiting bite") end)
                 if _G.fentiWaitForFishBite(fishingPart) then
-                    if Labels.Status then Labels.Status:SetText("Status: Bite handled — reset rod (no extra Primary)") end
-                    banLog("FISH", "Bite/reel done — skip pickupRod (completeBite already Primary); double Primary breaks next cast")
-                    task.wait(0.45)
-                    pcall(function() _G.fentiFish.ensureFishingRodEquipped() end)
-                    task.wait(0.85)
+                    if Labels.Status then Labels.Status:SetText("Status: Bite/QTE handled") end
+                    pcall(function() _G.fentiFish.fishDbg("loop: bite+QTE path done — soft rod check only") end)
+                    task.wait(0.4)
+                    if not chestFarmEnabled and fireproximityprompt and humanoidRootPart then
+                        local chestFolder = workspace:FindFirstChild("Chests")
+                        if chestFolder then
+                            for _, chest in ipairs(chestFolder:GetChildren()) do
+                                if chest.Name == "ChestBox" then
+                                    local chestPos
+                                    pcall(function()
+                                        if chest:IsA("Model") then chestPos = chest:GetPivot().Position
+                                        elseif chest:IsA("BasePart") then chestPos = chest.Position end
+                                    end)
+                                    if chestPos and (chestPos - humanoidRootPart.Position).Magnitude <= 50 then
+                                        for _, d in ipairs(chest:GetDescendants()) do
+                                            if d:IsA("ProximityPrompt") then
+                                                pcall(function() fireproximityprompt(d) end)
+                                                task.wait(2)
+                                                break
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    task.wait(1.5)
+                    pcall(function() _G.fentiFish.ensureFishingRodEquipped(true) end)
                 else
-                    if Labels.Status then Labels.Status:SetText("Status: No bite — reeling to reset line") end
+                    if Labels.Status then Labels.Status:SetText("Status: No bite — reset line") end
                     _G.fentiFish.pickupRod()
                     task.wait(1)
                 end
             else
-                if Labels.Status then Labels.Status:SetText("Status: Bobber not found — retry / alt cast") end
-                if castAttempts % 2 == 0 then
-                    lastCastAim = _G.fentiFish.castRodLong()
-                    _G.fentiLastFishCastAim = lastCastAim
-                    task.wait(2)
-                end
-                task.wait(1.2)
+                noBobberStreak = noBobberStreak + 1
+                if Labels.Status then Labels.Status:SetText("Status: No bobber — pause before next cast") end
+                task.wait(2.4)
             end
             if useBait then
                 pcall(function() _G.fentiFish.useBaitIfEnabled() end)
@@ -4415,6 +4502,15 @@ do
             local b = send(false)
             return a or b
         end
+        -- Mash QTE: map KeyLabel text → KeyCode (Xeno/Volt differ on names like Space).
+        local function mashKeyFromFishLabel(txt)
+            txt = tostring(txt or ""):gsub("%s+", ""):upper()
+            if txt == "" or #txt > 14 then return nil end
+            if txt == "SPACE" or txt == "SPACEBAR" then return Enum.KeyCode.Space end
+            if txt == "ENTER" or txt == "RETURN" then return Enum.KeyCode.Return end
+            local ok, kc = pcall(function() return Enum.KeyCode[txt] end)
+            return ok and kc or nil
+        end
         local function getCurrentMashKey()
             local container = _G.fentiGetMashingContainer()
             if not container or not container.Visible then return nil end
@@ -4422,9 +4518,7 @@ do
             if not circle then return nil end
             local kl = circle:FindFirstChild("KeyLabel")
             local txt = kl and kl.Text and kl.Text:gsub("%s+", ""):upper() or ""
-            if txt == "" then return nil end
-            local ok, kc = pcall(function() return Enum.KeyCode[txt] end)
-            return ok and kc or nil
+            return mashKeyFromFishLabel(txt)
         end
         local function fireMashingSuccess()
             local q = qteEv()
@@ -4451,9 +4545,6 @@ do
             local c = type(gc) == "function" and gc() or nil
             return c ~= nil and c.Visible == true
         end
-        -- Game client: only UserInputService.InputBegan on R/T/G/F matching KeyLabel advances v32; at target v32 it FireServer("MashingSuccess").
-        -- Remote spam alone does not tick v32 — must simulate the current KeyLabel key enough times (Easy 10 / Mid 20 / Hard 30 + margin).
-        local MASH_KEYS = { R = true, T = true, G = true, F = true }
         local function runFishingMashSequence(sourceTag, difficulty)
             sourceTag = sourceTag or "?"
             local tgt = QTE_TARGETS["Mid"]
@@ -4476,7 +4567,8 @@ do
                     fireMashingSuccess()
                 end
                 task.wait(0.35)
-                lockRootMotion()
+                -- Never leave velocity lock on during auto-fish — it zeros HRP every ~0.22s and fights spring rig + casts ("spaced out").
+                if isRunning then unlockRootMotion() else lockRootMotion() end
                 pcall(function()
                     if _G.fentiSpamNearbyChestPrompts then _G.fentiSpamNearbyChestPrompts(64, 18, 0.08) end
                 end)
@@ -4493,13 +4585,11 @@ do
                 local circle = c:FindFirstChild("Circle")
                 local kl = circle and circle:FindFirstChild("KeyLabel")
                 local txt = kl and kl.Text and kl.Text:gsub("%s+", ""):upper() or ""
-                if txt ~= "" and MASH_KEYS[txt] then
-                    local ok, kc = pcall(function() return Enum.KeyCode[txt] end)
-                    if ok and kc then
-                        simulateKey(kc)
-                        count = count + 1
-                        if count >= pressBudget then break end
-                    end
+                local kc = mashKeyFromFishLabel(txt)
+                if kc then
+                    simulateKey(kc)
+                    count = count + 1
+                    if count >= pressBudget then break end
                 end
                 task.wait(0.04)
             end
@@ -4508,7 +4598,7 @@ do
                 fireMashingSuccess()
             end
             task.wait(0.45)
-            lockRootMotion()
+            if isRunning then unlockRootMotion() else lockRootMotion() end
             pcall(function()
                 if _G.fentiSpamNearbyChestPrompts then _G.fentiSpamNearbyChestPrompts(64, 18, 0.08) end
             end)
@@ -4808,7 +4898,15 @@ do
         if not saints then return nil end
         local ents = saints:FindFirstChild("Entities")
         if not ents then return nil end
-        return ents:FindFirstChild(player.Name) or ents:FindFirstChild(player.DisplayName)
+        return ents:FindFirstChild(player.Name)
+            or ents:FindFirstChild(player.DisplayName)
+            or ents:FindFirstChild(tostring(player.UserId))
+    end
+
+    local function fentiIsOtherEntityFolder(folderName)
+        if folderName == player.Name or folderName == player.DisplayName then return false end
+        if folderName == tostring(player.UserId) then return false end
+        return true
     end
     
     local function hasSaintPart(partName)
@@ -4826,26 +4924,12 @@ do
             return
         end
         saintsClaimLock[part] = true
-        Library:Notify("Saints: claiming " .. partName .. " (respawn TP)", 3)
+        Library:Notify("Saints: claiming " .. partName, 3)
 
         if saintsResetBeforeClaim then
             fentiPromptTeleport(SAFE_ZONE_POS)
             task.wait(0.45)
             refreshCharacter()
-        end
-
-        local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.Health = 0
-            task.wait(0.2)
-        end
-
-        local newChar = player.CharacterAdded:Wait()
-        local newRoot = newChar:WaitForChild("HumanoidRootPart", 8)
-        if not newRoot then
-            saintsClaimLock[part] = nil
-            Library:Notify("Saints: no HRP after respawn", 4)
-            return
         end
 
         if not part:IsDescendantOf(workspace) then
@@ -4854,33 +4938,59 @@ do
             return
         end
 
-        task.wait(0.1)
+        refreshCharacter()
+        if not humanoidRootPart then
+            saintsClaimLock[part] = nil
+            Library:Notify("Saints: no HRP", 4)
+            return
+        end
+
         local atCF = part.CFrame
         pcall(function()
             if part:IsA("Model") then atCF = part:GetPivot() end
         end)
-        pcall(function()
-            newRoot.CFrame = atCF * CFrame.new(0, 3, 0)
-            newRoot.AssemblyLinearVelocity = Vector3.zero
-        end)
+        local targetCF = atCF * CFrame.new(0, 2, 0)
+        local tpOk = _G.fentiSoftTeleportTo and _G.fentiSoftTeleportTo(targetCF, "saintsClaim")
+        if not tpOk then
+            pcall(function()
+                refreshCharacter()
+                if humanoidRootPart then
+                    humanoidRootPart.CFrame = targetCF
+                    humanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+                end
+            end)
+        end
 
         refreshCharacter()
+        task.wait(0.12)
+        pcall(function()
+            if humanoidRootPart and part.Parent then
+                patchNearbyPrompts(humanoidRootPart.Position, 72)
+                patchAndFirePromptsOnInstance(part, "saintsClaim", 0.12)
+            end
+        end)
         task.wait(0.2)
         local claimedOk = false
         for _round = 1, math.max(1, saintsClaimPromptRounds) do
             if not part:IsDescendantOf(workspace) then break end
-            local prompt = part:FindFirstChildWhichIsA("ProximityPrompt", true)
-            if prompt then
-                for _ = 1, 8 do
-                    pcall(function()
-                        if _G.fentiFireProximityMinimal then _G.fentiFireProximityMinimal(prompt) end
-                    end)
-                    task.wait(0.08)
-                end
+            refreshCharacter()
+            local pr = waitForPrompt(part, 2.2)
+            if pr then
+                spamPrompt(pr, 10, 0.1)
             else
+                pcall(function()
+                    if humanoidRootPart then patchNearbyPrompts(humanoidRootPart.Position, 72) end
+                end)
+                for _ = 1, 10 do
+                    pcall(function()
+                        local p2 = part:FindFirstChildWhichIsA("ProximityPrompt", true)
+                        if p2 and _G.fentiFireProximityMinimal then _G.fentiFireProximityMinimal(p2) end
+                    end)
+                    task.wait(0.07)
+                end
                 fireAllPrompts(part, 4)
             end
-            task.wait(0.28)
+            task.wait(0.32)
             if hasSaintPart(partName) then
                 claimedOk = true
                 break
@@ -4898,7 +5008,7 @@ do
             local okSafe = false
             for att = 1, saintsSafeAfterClaimMaxAttempts do
                 refreshCharacter()
-                if respawnTeleportInstant(SAFE_ZONE_POS, "saintsPostClaim_" .. att) then
+                if _G.fentiSoftTeleportTo and _G.fentiSoftTeleportTo(SAFE_ZONE_POS, "saintsPostClaim_" .. att) then
                     okSafe = true
                     break
                 end
@@ -4951,13 +5061,68 @@ do
         local function onWorkspaceChildAdded(child)
             onWorldPart(child, false)
         end
-    
-        for _, child in ipairs(workspace:GetChildren()) do
-            if child:IsA("BasePart") and matchesSaintsFilter(child.Name) then
-                onWorldPart(child, false)
+
+        local function scanEntityFolderForSaints(folder, fromPoll)
+            for _, ch in ipairs(folder:GetChildren()) do
+                if ch:IsA("BasePart") and matchesSaintsFilter(ch.Name) and not hasSaintPart(ch.Name) then
+                    onWorldPart(ch, fromPoll)
+                elseif ch:IsA("Model") then
+                    for _, d in ipairs(ch:GetDescendants()) do
+                        if d:IsA("BasePart") and matchesSaintsFilter(d.Name) and not hasSaintPart(d.Name) then
+                            onWorldPart(d, fromPoll)
+                        end
+                    end
+                end
             end
         end
-        table.insert(saintsConns, workspace.ChildAdded:Connect(onWorkspaceChildAdded))
+
+        local function scanAllSaintsParts(fromPoll)
+            for _, ch in ipairs(workspace:GetChildren()) do
+                if ch:IsA("BasePart") and matchesSaintsFilter(ch.Name) and not hasSaintPart(ch.Name) then
+                    onWorldPart(ch, fromPoll)
+                end
+            end
+            local wcp = workspace:FindFirstChild("CorpseParts")
+            if wcp then
+                for _, ch in ipairs(wcp:GetChildren()) do
+                    if ch:IsA("BasePart") and matchesSaintsFilter(ch.Name) and not hasSaintPart(ch.Name) then
+                        onWorldPart(ch, fromPoll)
+                    end
+                end
+            end
+            local saintsF = workspace:FindFirstChild("saints")
+            if not saintsF then return end
+            local ents = saintsF:FindFirstChild("Entities")
+            if not ents then return end
+            for _, folder in ipairs(ents:GetChildren()) do
+                if fentiIsOtherEntityFolder(folder.Name) then
+                    scanEntityFolderForSaints(folder, fromPoll)
+                end
+            end
+        end
+
+        local hookedSaintsRoots = {}
+        local function hookSaintsWatchTree(sf)
+            if not sf or hookedSaintsRoots[sf] then return end
+            hookedSaintsRoots[sf] = true
+            table.insert(saintsConns, sf.DescendantAdded:Connect(function(inst)
+                if not saintsEnabled then return end
+                if inst:IsA("BasePart") and matchesSaintsFilter(inst.Name) then
+                    task.defer(function()
+                        if inst.Parent then onWorldPart(inst, false) end
+                    end)
+                end
+            end))
+        end
+
+        scanAllSaintsParts(false)
+        local existingSaints = workspace:FindFirstChild("saints")
+        if existingSaints then hookSaintsWatchTree(existingSaints) end
+
+        table.insert(saintsConns, workspace.ChildAdded:Connect(function(ch)
+            if ch.Name == "saints" then hookSaintsWatchTree(ch) end
+            onWorkspaceChildAdded(ch)
+        end))
         table.insert(saintsConns, workspace.DescendantAdded:Connect(function(inst)
             if not inst:IsA("BasePart") then return end
             local par = inst.Parent
@@ -4965,46 +5130,15 @@ do
                 onWorldPart(inst, false)
             end
         end))
-        do
-            local cp = workspace:FindFirstChild("CorpseParts")
-            if cp then
-                for _, ch in ipairs(cp:GetChildren()) do
-                    if ch:IsA("BasePart") then onWorldPart(ch, false) end
-                end
-            end
-        end
     
         saintsPollThread = task.spawn(function()
             while saintsEnabled do
                 local stealthPoll = rawget(_G, "FENTI_SAINTS_STEALTH") == true or saintsPickupStealth == true
-                -- Non-stealth was 2s → hammered onWorldPart; 10–16s is enough to catch new entity drops.
-                local waitSec = stealthPoll and (math.random(48, 92) / 10)
+                local waitSec = stealthPoll and (math.random(32, 62) / 10)
                     or (saintsAllInOne and (2 + math.random(0, 20) / 10) or (10 + math.random(0, 60) / 10))
                 task.wait(waitSec)
                 if not saintsEnabled then break end
-                pcall(function()
-                    local wcp = workspace:FindFirstChild("CorpseParts")
-                    if wcp then
-                        for _, part in ipairs(wcp:GetChildren()) do
-                            if part:IsA("BasePart") and matchesSaintsFilter(part.Name) and not hasSaintPart(part.Name) then
-                                onWorldPart(part, true)
-                            end
-                        end
-                    end
-                    local saints = workspace:FindFirstChild("saints")
-                    if not saints then return end
-                    local ents = saints:FindFirstChild("Entities")
-                    if not ents then return end
-                    for _, folder in ipairs(ents:GetChildren()) do
-                        if folder.Name ~= player.Name and folder.Name ~= player.DisplayName then
-                            for _, part in ipairs(folder:GetChildren()) do
-                                if part:IsA("BasePart") and matchesSaintsFilter(part.Name) and not hasSaintPart(part.Name) then
-                                    onWorldPart(part, true)
-                                end
-                            end
-                        end
-                    end
-                end)
+                pcall(function() scanAllSaintsParts(true) end)
             end
             saintsPollThread = nil
         end)
@@ -5078,9 +5212,14 @@ do
                 local ents = saints:FindFirstChild("Entities")
                 if ents then
                     for _, folder in ipairs(ents:GetChildren()) do
-                        if folder.Name ~= player.Name and folder.Name ~= player.DisplayName then
+                        if fentiIsOtherEntityFolder(folder.Name) then
                             for _, p in ipairs(folder:GetChildren()) do
                                 consider(p)
+                                if p:IsA("Model") then
+                                    for _, d in ipairs(p:GetDescendants()) do
+                                        consider(d)
+                                    end
+                                end
                             end
                         end
                     end
@@ -5266,7 +5405,7 @@ do
     if not _G.fentiWindow then warn("[fenti] Could not open the menu (Library/CreateWindow returned nil)."); return end
     do
     (function()
-    -- [FENTI-22·core] Sidebar order: Information → Players → Fishing → Teleport → Saints → D4C farm → NPCs → Aura → Config (last)
+    -- [FENTI-22·core] Sidebar order: Information → Players → Fishing → Teleport → Saints → D4C farm → Aimbot → NPCs → Aura → Config (last)
     local Tabs = {}
     local Window = _G.fentiWindow
     pcall(function() Tabs.Information = Window:AddTab("Information", "info") end)
@@ -5275,6 +5414,7 @@ do
     pcall(function() Tabs.Teleport = Window:AddTab("Teleport", "map-pin") end)
     pcall(function() Tabs.Saints = Window:AddTab("Saints", "crosshair") end)
     pcall(function() Tabs.D4CFarm = Window:AddTab("D4C farm", "swords") end)
+    pcall(function() Tabs.Aimbot = Window:AddTab("Aimbot", "zap") end)
     pcall(function() Tabs.NPCs = Window:AddTab("NPCs", "user") end)
     pcall(function() Tabs.Aura = Window:AddTab("Aura", "palette") end)
     pcall(function() Tabs.Config = Window:AddTab("Config", "cog") end)
@@ -5309,11 +5449,16 @@ do
     InfoLeft.Game:AddButton({ Text = "Copy JobId", Func = function()
         if setclipboard then setclipboard(game.JobId); Library:Notify("JobId copied.", 3) else Library:Notify("Clipboard not supported.", 3) end
     end })
+    local InfoContributors = Tabs.Information:AddLeftGroupbox("Contributors", "users")
+    InfoContributors:AddLabel("<b>capy</b>", true)
+    InfoContributors:AddLabel("<b>ivan</b>", true)
+    InfoContributors:AddLabel("<b>920m</b>", true)
     
     InfoRightOverview:AddLabel("<b>Players</b> — you (anti-ragdoll, kill streak) + ESP others", true)
     InfoRightOverview:AddLabel("<b>Fishing</b> — auto fish, shop, webhook", true)
-    InfoRightOverview:AddLabel("<b>Teleport</b> — places (kill TP only)", true)
-    InfoRightOverview:AddLabel("<b>Saints</b> — kill-TP chain, instant prompts", true)
+    InfoRightOverview:AddLabel("<b>Teleport</b> — tp ", true)
+    InfoRightOverview:AddLabel("<b>Saints</b> — auto claim + optional safe hop", true)
+    InfoRightOverview:AddLabel("<b>Aimbot</b> — for u fat fucking loosers", true)
     InfoRightOverview:AddLabel("<b>NPCs</b> — teleport, talk, reroll", true)
     InfoRightOverview:AddLabel("<b>Aura</b> — character effects PLEASE USE THEM", true)
     InfoRightOverview:AddLabel("<b>Config</b> — save, unload", true)
@@ -5429,10 +5574,6 @@ do
         webhookEnabled = val
         if val and webhookURL ~= "" then Library:Notify("Webhook ON", 3) elseif val then Library:Notify("Webhook ON — set URL", 3) else Library:Notify("Webhook OFF", 3) end
     end })
-    FishingRight:AddButton({ Text = "Test webhook", Func = function()
-        if webhookURL == "" then Library:Notify("Set a webhook URL first.", 3); return end
-        local orig = webhookEnabled; webhookEnabled = true; sendFishWebhook("You caught a common Testfish!"); webhookEnabled = orig; Library:Notify("Test sent (common).", 3)
-    end })
     FishingRight:AddDivider()
     FishingRight:AddLabel("Which rarities to post (uncheck to skip):", true)
     FishingRight:AddToggle("WebhookNotifyLegendary", { Text = "Post Legendary", Default = true, Callback = function(v) webhookRarityNotify.Legendary = v end })
@@ -5442,7 +5583,48 @@ do
     
     FishingLeft:AddToggle("UseBait", { Text = "Use bait", Default = true, Callback = function(val) useBait = val end })
     FishingLeft:AddToggle("AutoBuyBait", { Text = "Auto buy bait when out", Default = false, Callback = function(val) autoBuyBait = val end })
-    FishingLeft:AddToggle("AutoFishLoot", { Text = "Auto loot ", Default = false, Callback = function(val) autoFishLootChests = val end })
+    FishingLeft:AddToggle("AutoFishLoot", { Text = "Auto loot (chests ≤40 studs)", Default = false, Callback = function(val) autoFishLootChests = val end })
+    FishingLeft:AddDivider()
+    FishingLeft:AddLabel("<b>Fishing TP presets</b>", true)
+    FishingLeft:AddDropdown("FishSpotPick", {
+        Text = "Teleport preset",
+        Values = fentiFishSpotDropdownValues(),
+        Default = "Default",
+        Callback = function(val) fentiSelectedFishSpotName = val end,
+    })
+    FishingLeft:AddInput("FishSpotNewName", { Text = "New preset name", Default = "My spot", Finished = true })
+    FishingLeft:AddButton({ Text = "Add preset (save stand here)", Func = function()
+        refreshCharacter()
+        if not humanoidRootPart then Library:Notify("No character.", 3); return end
+        local name = Options.FishSpotNewName and Options.FishSpotNewName.Value or ""
+        if type(name) ~= "string" or name == "" then name = "Spot " .. (#fentiCustomFishSpotEntries + 1) end
+        for _, e in ipairs(fentiCustomFishSpotEntries) do
+            if e.name == name then Library:Notify("That name already exists.", 3); return end
+        end
+        table.insert(fentiCustomFishSpotEntries, { name = name, cf = humanoidRootPart.CFrame })
+        pcall(function()
+            if Options.FishSpotPick then Options.FishSpotPick:SetValues(fentiFishSpotDropdownValues()) end
+        end)
+        Library:Notify("Added \"" .. name .. "\"", 3)
+    end })
+    FishingLeft:AddButton({ Text = "Remove selected preset", Func = function()
+        local sel = fentiSelectedFishSpotName
+        if sel == "Default (hub)" then Library:Notify("Cannot remove default hub spot.", 3); return end
+        for i, e in ipairs(fentiCustomFishSpotEntries) do
+            if e.name == sel then table.remove(fentiCustomFishSpotEntries, i); break end
+        end
+        fentiSelectedFishSpotName = "Default (hub)"
+        pcall(function()
+            if Options.FishSpotPick then
+                Options.FishSpotPick:SetValues(fentiFishSpotDropdownValues())
+                Options.FishSpotPick:SetValue("Default (hub)")
+            end
+        end)
+        Library:Notify("Removed.", 2)
+    end })
+    FishingLeft:AddButton({ Text = "Teleport to selected preset", Func = function()
+        smartTeleport(fentiGetFishSpotCFrame()); Library:Notify("Teleported.", 2)
+    end })
     FishingLeft:AddDivider()
     FishingLeft:AddButton({ Text = "START fishing", Func = function()
         if not isRunning then isRunning = true; Library:Notify("Started.", 3); task.spawn(_G.fentiFishingLoop) else Library:Notify("Already running.", 2) end
@@ -5477,11 +5659,11 @@ do
     FishingShop:AddButton({ Text = "Buy ammo pack", Func = function() buyAmmoPack(); Library:Notify("Buying ammo…", 3) end })
     end end -- Fishing
     
-    -- [FENTI-22·saints] Saints sniper farm (monitor + same 2× kill-TP chain)
+    -- [FENTI-22·saints] Saints sniper farm (monitor + soft TP)
     if Tabs.Saints then do
     local SaintsFarm = Tabs.Saints:AddLeftGroupbox("Saints", "crosshair")
     local SaintsStyle = Tabs.Saints:AddRightGroupbox("Pickup style", "shield")
-    SaintsFarm:AddLabel("Uses the same <b>kill TP</b> engine as Teleport (see <b>Fast kill-TP</b> there).", true)
+    SaintsFarm:AddLabel("Safe hop after claim uses the same move as the Teleport tab.", true)
     SaintsFarm:AddDivider()
     SaintsFarm:AddToggle("SaintsAutoFarm", {
         Text = "Auto pickup saints",
@@ -5530,11 +5712,11 @@ do
         end,
     })
     SaintsFarm:AddToggle("SaintsResetBeforeClaim", {
-        Text = "Kill TP to safe before claim",
+        Text = "Safe hop before claim",
         Default = false,
         Callback = function(v)
             saintsResetBeforeClaim = v
-            Library:Notify(v and "Pre-claim: kill TP to safe zone first" or "Pre-claim safe hop off", 2)
+            Library:Notify(v and "Pre-claim: safe hop first" or "Pre-claim safe hop off", 2)
         end,
     })
     SaintsStyle:AddLabel("<b>Parts to target</b> — saints parts", true)
@@ -5569,7 +5751,7 @@ do
         Default = true,
         Callback = function(v)
             saintsSafeAfterClaim = v
-            Library:Notify(v and "After saints claim: kill-TP safe (retries)" or "Post-claim safe TP off", 2)
+            Library:Notify(v and "After claim: safe hop (retries)" or "Post-claim safe TP off", 2)
         end,
     })
     SaintsStyle:AddToggle("SaintsStealthPickup", { Text = "Slower pickup (safer)", Default = true, Callback = function(v) saintsPickupStealth = v end })
@@ -5832,29 +6014,76 @@ do
     end)
     end end -- D4C farm
     
+    -- [FENTI-22·aimbot] External ESP / silent aim (loads remote Lua; executor-dependent)
+    if Tabs.Aimbot then do
+    local FENTI_EXTERNAL_AIMBOT_URL = "https://raw.githubusercontent.com/vbbi33jkllljcvvbjkqw89fjjkjhkjzsdaih/dddvbk34vb/refs/heads/main/Aimboitsilentdih.lua"
+    local AimbotBox = Tabs.Aimbot:AddLeftGroupbox("External loader", "shield")
+    AimbotBox:AddLabel("<font color='#FFAA00'><b>Warning</b></font> — This is only for jews although it doesnt ban through what i tested loads silentaim/esp", true)
+    AimbotBox:AddLabel("<font color='#FF6666'><b>Solara/xeno will not run this.</b></font> Use a stronger executor (e.g. <b>Volt</b> or similar)", true)
+    AimbotBox:AddLabel("use with ur own descretion and u fat fucking looser aimbotting in this fucking game", true)
+    AimbotBox:AddDivider()
+    AimbotBox:AddButton({
+        Text = "Load external aimbot / ESP",
+        Func = function()
+            if rawget(_G, "fentiExternalAimbotLoaded") == true then
+                Library:Notify(" aimbot already loaded", 4)
+                return
+            end
+            task.spawn(function()
+                Library:Notify("Downloading external script…", 3)
+                local get, compile = rawget(_G, "fentiHttpGet"), rawget(_G, "loadstring") or loadstring
+                if type(get) ~= "function" then
+                    Library:Notify("HTTP helper missing — cannot fetch script.", 5)
+                    return
+                end
+                if type(compile) ~= "function" then
+                    Library:Notify("loadstring not available on this executor.", 5)
+                    return
+                end
+                local src = get(FENTI_EXTERNAL_AIMBOT_URL)
+                if type(src) ~= "string" or #src < 80 then
+                    Library:Notify("failed", 5)
+                    return
+                end
+                local chunk, cerr
+                do
+                    local okc, a, b = pcall(function() return compile(src, "fenti_external_aimbot") end)
+                    if okc and type(a) == "function" then chunk, cerr = a, b
+                    else
+                        local ok2, c, d = pcall(function() return compile(src) end)
+                        if ok2 and type(c) == "function" then chunk, cerr = c, d end
+                    end
+                end
+                if type(chunk) ~= "function" then
+                    Library:Notify("Compile failed — check F9 Output.", 5)
+                    warn("[fenti] external aimbot compile: " .. tostring(cerr))
+                    return
+                end
+                local okRun, runErr = pcall(chunk)
+                if not okRun then
+                    Library:Notify("Runtime error: " .. tostring(runErr):sub(1, 120), 6)
+                    warn("[fenti] external aimbot run: " .. tostring(runErr))
+                    return
+                end
+                rawset(_G, "fentiExternalAimbotLoaded", true)
+                Library:Notify("jewjewjewjejwejwej — check in-game (ESP / aim)", 6)
+            end)
+        end,
+    })
+    end end -- Aimbot
+    
     -- [FENTI-22c] Teleport (locations + move engine only)
     if Tabs.Teleport then do
     local TPLocations = Tabs.Teleport:AddLeftGroupbox("Places", "map-pin")
-    TPLocations:AddLabel("All place &amp; prompt TPs use <b>kill TP</b> (die + respawn at target). See <b>Move style</b>.", true)
+    TPLocations:AddLabel("Place and prompt teleports use the hub move (no respawn).", true)
     TPLocations:AddDivider()
-    TPLocations:AddButton({ Text = "Fishing spot", Func = function() smartTeleport(BEST_FISHING_SPOT); Library:Notify("Done.", 2) end })
-    TPLocations:AddButton({ Text = "Safe zone", Func = function() smartTeleport(SAFE_ZONE_POS); Library:Notify("Done.", 2) end })
-    TPLocations:AddDivider()
-    TPLocations:AddButton({ Text = "TP kill bypass: fish → safe", Func = function()
-        task.spawn(function()
-            local ok, why = _G.fentiRespawnTeleportTwoHop(BEST_FISHING_SPOT, SAFE_ZONE_POS, 0.58, "teleportTab")
-            if ok then Library:Notify("Done.", 2)
-            else Library:Notify("Failed: " .. tostring(why), 4) end
-        end)
-        Library:Notify("Running…", 2)
+    TPLocations:AddButton({ Text = "Fishing spot (selected preset)", Func = function()
+        smartTeleport(fentiGetFishSpotCFrame()); Library:Notify("Done.", 2)
     end })
+    TPLocations:AddButton({ Text = "Safe zone", Func = function() smartTeleport(SAFE_ZONE_POS); Library:Notify("Done.", 2) end })
     
     local TPMoves = Tabs.Teleport:AddRightGroupbox("Move style", "move")
-    TPMoves:AddLabel("Only <b>kill TP</b> is used", true)
-    TPMoves:AddDivider()
-    TPMoves:AddToggle("BypassInstantPin", { Text = "Fast kill-TP (skip spawn hold)", Default = true, Callback = function(val)
-        Library:Notify(val and "Fast: one snap after respawn, no long pin" or "Spawn hold: pin HRP at target a few seconds", 3)
-    end })
+    TPMoves:AddLabel("No kill-respawn. Presets are chosen under <b>Fishing</b> → fishing TP dropdown.", true)
     
     local TPWorld = Tabs.Teleport:AddRightGroupbox("Prompts", "hand")
     TPWorld:AddToggle("AutoCollectChests", { Text = "Auto open chests nearby", Default = true, Callback = function(v)
