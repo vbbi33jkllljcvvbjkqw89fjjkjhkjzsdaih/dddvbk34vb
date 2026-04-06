@@ -1,27 +1,27 @@
--- fenti | FREE SLOP
+-- fenti | FREE DIH
 --
 -- HOW TO NAVIGATE THIS FILE
 --   Use your editor search (Ctrl+F) on the tag in the first column — each major block starts with the same tag in a section header.
 --
---   TAG         HOW TO FIND STUFF 
---   [FENTI-00·loader] AC module — HttpGet + loadstring from default GitHub raw (override _G.FENTI_AC_MODULE_URL)
+--            HOW TO FIND STUFF 
+--   [FENTI-00·loader] AC module — HttpGet + loadstring from GitHub raw (override _G.FENTI_AC_MODULE_URL)
 --   [FENTI-01]   Bootstrap + Potassium gate
 --   [FENTI-02B]  Module picker UI (what features load)
 --   [FENTI-02C]  Obsidian Library load + TextService patch
---   [FENTI-03]   Services (Strike watch lives in AC module)
+--   [FENTI-03]   Services (Strike watch lives in AC module - needs finishing)
 --   [FENTI-04]   Player, character, remotes, QTE refs
---   [FENTI-04a]  Self aura (meshes / particles — Obsidian Aura tab)
+--   [FENTI-04a]  Self aura (meshes / particles)
 --   [FENTI-05]   Constants (spots, executor checks, Support table)
---   [FENTI-06]   All shared state variables (+ Labels, caches)
---   [FENTI-07]   Small utils (session time, refresh char, anti-AFK, no-stun)
---   [FENTI-08]   Ban / fail logging (Adonis hooks in AC module)
---   [FENTI-09]   ESP (highlights, screen TextLabel, loops)
+--   [FENTI-06]   All shared state variables (+ Labels, caches) 
+--   [FENTI-07]   Small utils (session time, refresh char, anti-AFK, no-stun) 
+--   [FENTI-08]   Ban / fail logging (Adonis hooks in AC module - added more 5/04/26 )
+--   [FENTI-09]   ESP (highlights, Box esp, and more)
 --   [FENTI-10]   (removed) aimbot / silent aim
---   [FENTI-11]   GetMousePos cleanup only
---   [FENTI-12]   Combat (triggerbot, screen shake)
+--   [FENTI-11]   GetMousePos - cleanup only
+--   [FENTI-12]   Combat (triggerbot, screen shake) - removed due to detection?
 --   [FENTI-13]   Horse + tween TP helpers
---   [FENTI-14]   Smart TP, root motion hold, reset TP
---   [FENTI-15]   NPCs, shop, proximity prompts, radius tick, chest helpers
+--   [FENTI-14]   Smart TP, root motion hold, reset TP - all removed due to new bypass
+--   [FENTI-15]   NPCs, shop, proximity prompts, radius tick, chest helpers - polished up 6/04/26
 --   [FENTI-16]   Auto dialogue / reroll (IIFE → _G.fentiDialogue)
 --   [FENTI-17]   Fishing (rod, bait, cast/catch loop, bobber scan, bite → completeBiteMinigame)
 --                  [FENTI-17·mash] _G.fentiGetMashingContainer IIFE
@@ -30,15 +30,9 @@
 --   [FENTI-18]   Chest / corpse / saints farm (_G.FentiFarm IIFE)
 --   [FENTI-20]   Webhook
 --   [FENTI-21]   Serverhop
---   [FENTI-22]   Obsidian UI: Information → Players → Fishing → Teleport → Saints → D4C farm → Aimbot → NPCs → Aura → Config
+--   [FENTI-22]   Obsidian UI layout (really shitty)
 --   [FENTI-23]   Post-UI startup notify
---
--- NOTE: Luau limits ~200 locals per function prototype — plain `do` still counts toward the main chunk; use (function() … end)().
--- AC bypass (required): hub always fetches the module via prelude HttpGet + loadstring.
---   Override URL only: _G.FENTI_AC_MODULE_URL = "https://raw.githubusercontent.com/…/your_ac.lua" (non-empty string before run).
---   If HttpGet fails or the chunk is invalid, the hub stops (warn + return). No stub / no inject-only path.
--- AC module: _G.FENTI_AC_SILENT = true skips the success print in fenti_ac_bypass.lua (optional).
--- Tunables (read by AC module): FENTI_SAFE_AC, FENTI_ENABLE_MODULE8, FENTI_ENABLE_ADONIS_GC, FENTI_TREE_DESTROY_PASS, etc.
+--   finding this will do no good. loadstring deobf will ip log u and from there nothing good will happen. i know everything. 
 do
     (function()
         local g = _G
