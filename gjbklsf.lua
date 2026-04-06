@@ -5783,7 +5783,7 @@ do
         return names
     end
     local PlayersTP = Tabs.Players:AddRightGroupbox("Player TP", "navigation")
-    PlayersTP:AddLabel("Soft-move to another player (same as Teleport tab).", true)
+    PlayersTP:AddLabel("TP to another player.", true)
     PlayersTP:AddDropdown("PlayerTPPick", {
         Text = "Player",
         Values = fentiOtherPlayerNamesForTp(),
