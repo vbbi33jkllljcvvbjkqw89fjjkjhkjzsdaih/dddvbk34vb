@@ -1,9 +1,9 @@
--- fenti | Obsidian UI (Information, Players, Fishing, Teleport, Saints, D4C farm, Aimbot, NPCs, Aura, Config — no module picker)
+-- fenti | FREE SLOP
 --
 -- HOW TO NAVIGATE THIS FILE
 --   Use your editor search (Ctrl+F) on the tag in the first column — each major block starts with the same tag in a section header.
 --
---   TAG          WHAT LIVEs THERE
+--   TAG         HOW TO FIND STUFF 
 --   [FENTI-00·loader] AC module — HttpGet + loadstring from default GitHub raw (override _G.FENTI_AC_MODULE_URL)
 --   [FENTI-01]   Bootstrap + Potassium gate
 --   [FENTI-02B]  Module picker UI (what features load)
@@ -39,12 +39,6 @@
 --   If HttpGet fails or the chunk is invalid, the hub stops (warn + return). No stub / no inject-only path.
 -- AC module: _G.FENTI_AC_SILENT = true skips the success print in fenti_ac_bypass.lua (optional).
 -- Tunables (read by AC module): FENTI_SAFE_AC, FENTI_ENABLE_MODULE8, FENTI_ENABLE_ADONIS_GC, FENTI_TREE_DESTROY_PASS, etc.
---
--- OBFUSCATION: after bootstrap, prelude resolves APIs via rawget(_G, …). Iron Brew: whitelist loadstring load getgenv getrenv (and syn/http if you need request fallback).
-
--- [FENTI-prelude] Loaders / obfuscators sometimes set globals to booleans; calling them → "attempt to call a boolean value".
--- Also: never do loadstring(x)() without checking type(chunk) == "function" (chunk can be false in some envs).
--- Many executors expose loadstring/getgenv as true globals but not as _G fields — mirror once so rawget paths work (unobfuscated + obfuscated).
 do
     (function()
         local g = _G
