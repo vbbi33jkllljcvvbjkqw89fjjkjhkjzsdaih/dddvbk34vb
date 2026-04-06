@@ -1647,7 +1647,7 @@ do
     -- Real catch count: only bump on server/client catch notifications (not bite/reel heuristics).
     local lastFentiCatchNotifAt = 0
     local lastFentiChestPromptSpam = 0
-    local autoDialogueEnabled, dialogueConnection, rerollCount = false, nil, 0
+    local autoDialogueEnabled, dialogueRerollThread, rerollCount = false, nil, 0
     local corpseListenerActive, corpseListenerConn = false, nil
     local activeConnections, qteInProgress = {}, false
     local killstreakTrackerEnabled, antiRagdollEnabled = false, false
@@ -1656,7 +1656,7 @@ do
     local VIM; pcall(function() VIM = game:GetService("VirtualInputManager") end)
     local Labels = {}
     local sendFishWebhook, serverHop, removeEntityESP, removePlayerESP
-    local ESPState = { PlayerCache = {}, EntityCache = {}, renderConn = nil, updateConn = nil, espSession = 0, worldConns = {}, screenGui = nil }
+    local ESPState = { PlayerCache = {}, EntityCache = {}, renderConn = nil, updateConn = nil, espSession = 0, worldConns = {}, screenGui = nil, _espNextClock = 0 }
     -- ----------------------------------------------------------------------------
     -- [FENTI-07] 7. CORE UTILITIES
     -- ----------------------------------------------------------------------------
@@ -1689,28 +1689,84 @@ do
     end)
     
     pcall(function()
-        for _, sp in pairs(workspace:GetDescendants()) do
-            if sp:IsA("SpawnLocation") then SAFE_ZONE_POS = sp.CFrame + Vector3.new(0, 5, 0); break end
+        local function scanSpawn(folder, depth, maxDepth)
+            if depth > maxDepth then return nil end
+            for _, ch in ipairs(folder:GetChildren()) do
+                if ch:IsA("SpawnLocation") then return ch end
+                local s = scanSpawn(ch, depth + 1, maxDepth)
+                if s then return s end
+            end
+            return nil
         end
+        local sp = scanSpawn(workspace, 0, 6)
+        if sp then SAFE_ZONE_POS = sp.CFrame + Vector3.new(0, 5, 0) end
     end)
     
-    local function antiAFKLoop()
+    local function fentiStripIdledConnections()
+        if not Support.Connections then return end
         pcall(function()
-            if Support.Connections then
-                for _, conn in pairs(getconnections(player.Idled)) do
-                    if conn.Disable then conn:Disable() elseif conn.Disconnect then conn:Disconnect() end
-                end
+            for _, conn in pairs(getconnections(player.Idled)) do
+                if conn.Disable then conn:Disable()
+                elseif conn.Disconnect then conn:Disconnect() end
             end
         end)
-        while task.wait(60) do
-            if Toggles.AntiAFK and Toggles.AntiAFK.Value then
+    end
+
+    local fentiAntiAfkPulseIndex = 0
+    local function fentiAntiAfkVirtualClick()
+        local vu = VirtualUser
+        if not vu then
+            pcall(function() vu = game:GetService("VirtualUser") end)
+        end
+        if not vu then return false end
+        local cam = workspace.CurrentCamera
+        local cf = (cam and cam.CFrame) or CFrame.new()
+        local v2 = Vector2.new(0, 0)
+        local okDown = pcall(function()
+            vu:CaptureController()
+            vu:Button2Down(v2, cf)
+        end)
+        if okDown then
+            task.wait(0.14)
+            pcall(function() vu:Button2Up(v2, cf) end)
+            return true
+        end
+        okDown = pcall(function()
+            vu:CaptureController()
+            vu:Button1Down(v2)
+        end)
+        if okDown then
+            task.wait(0.07)
+            pcall(function() vu:Button1Up(v2) end)
+            return true
+        end
+        return false
+    end
+
+    local function antiAFKLoop()
+        task.wait(2.5)
+        while true do
+            local on = Toggles.AntiAFK and Toggles.AntiAFK.Value
+            if on then
+                fentiAntiAfkPulseIndex = fentiAntiAfkPulseIndex + 1
+                if fentiAntiAfkPulseIndex % 5 == 1 then
+                    fentiStripIdledConnections()
+                end
                 pcall(function()
-                    VirtualUser:CaptureController()
-                    VirtualUser:Button2Down(Vector2.new(0,0), camera.CFrame)
-                    task.wait(0.2)
-                    VirtualUser:Button2Up(Vector2.new(0,0), camera.CFrame)
+                    if not fentiAntiAfkVirtualClick() then
+                        local ch = player.Character
+                        local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+                        if hum then
+                            hum:Move(Vector3.new(1e-4, 0, 1e-4), false)
+                            task.wait(0.05)
+                            hum:Move(Vector3.zero, false)
+                        end
+                    end
                 end)
+            else
+                fentiAntiAfkPulseIndex = 0
             end
+            task.wait(on and 32 or 12)
         end
     end
     
@@ -2166,8 +2222,9 @@ do
     end
     
     local function updateESPLoop()
-        refreshCharacter()
-        if not humanoidRootPart then return end
+        local myChar = player.Character
+        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        if not myRoot then return end
         local cam = workspace.CurrentCamera
         if not cam then
             for _, data in pairs(ESPState.PlayerCache) do
@@ -2184,7 +2241,7 @@ do
             end
             return
         end
-        local myPos = humanoidRootPart.Position
+        local myPos = myRoot.Position
         local maxD = VisualSettings.RenderDistance
         local maxDsq = maxD * maxD
     
@@ -2339,8 +2396,12 @@ do
         end
     
         if ESPState.updateConn then ESPState.updateConn:Disconnect() end
-        ESPState.updateConn = RunService.RenderStepped:Connect(function()
+        ESPState._espNextClock = 0
+        ESPState.updateConn = RunService.Heartbeat:Connect(function()
             if not espEnabled or not VisualSettings.Enabled then return end
+            local now = os.clock()
+            if now < ESPState._espNextClock then return end
+            ESPState._espNextClock = now + 0.1
             pcall(updateESPLoop)
         end)
     
@@ -2538,9 +2599,7 @@ do
         screenShakeHooked = true
         local shakeRemote = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("ScreenShakeRemote")
         if not shakeRemote then
-            for _, desc in pairs(RS:GetDescendants()) do
-                if desc.Name == "ScreenShakeRemote" then shakeRemote = desc; break end
-            end
+            shakeRemote = RS:FindFirstChild("ScreenShakeRemote", true)
         end
         if shakeRemote then
             if Support.Connections then
@@ -2556,7 +2615,7 @@ do
         local shakeSkip = 0
         table.insert(screenShakeConnections, RunService.RenderStepped:Connect(function()
             if not noScreenShake then return end
-            shakeSkip = shakeSkip + 1; if shakeSkip < 2 then return end; shakeSkip = 0
+            shakeSkip = shakeSkip + 1; if shakeSkip < 3 then return end; shakeSkip = 0
             local currentCF = camera.CFrame
             local delta = (currentCF.Position - lastCamCF.Position).Magnitude
             if delta > 0.01 and delta < 0.5 then
@@ -2619,17 +2678,26 @@ do
         end
         if not fired then
             pcall(function()
-                for _, desc in pairs(workspace:GetDescendants()) do
-                    if desc:IsA("ProximityPrompt") and desc.Parent and desc.Parent.Parent == horse then
-                        pcall(function()
-                            desc.HoldDuration = 0
-                            local m = desc.MaxActivationDistance
-                            desc.MaxActivationDistance = math.min(FENTI_PROMPT_MAX_STRETCH, math.max(m > 0.05 and m or 10, 18))
-                            desc.Enabled = true
-                        end)
-                        task.wait(0.05)
-                        safeFireProximityPrompt(desc)
-                        fired = true; break
+                local stack = { horse }
+                local si, cap = 1, 320
+                while si <= #stack and cap > 0 do
+                    local node = stack[si]
+                    si = si + 1
+                    cap = cap - 1
+                    for _, desc in ipairs(node:GetChildren()) do
+                        if desc:IsA("ProximityPrompt") then
+                            pcall(function()
+                                desc.HoldDuration = 0
+                                local m = desc.MaxActivationDistance
+                                desc.MaxActivationDistance = math.min(FENTI_PROMPT_MAX_STRETCH, math.max(m > 0.05 and m or 10, 18))
+                                desc.Enabled = true
+                            end)
+                            task.wait(0.05)
+                            safeFireProximityPrompt(desc)
+                            fired = true
+                            return
+                        end
+                        table.insert(stack, desc)
                     end
                 end
             end)
@@ -2918,17 +2986,34 @@ do
         end
         local function pnp(center, radius)
             radius = radius or 60
+            local rSq = radius * radius
+            local budget = 950
             pcall(function()
-                for _, desc in pairs(workspace:GetDescendants()) do
-                    if desc:IsA("ProximityPrompt") then
-                        local pos = fpwp(desc)
-                        if pos and (pos - center).Magnitude < radius then
-                            desc.HoldDuration = 0
-                            local m = desc.MaxActivationDistance
-                            desc.MaxActivationDistance = math.min(FENTI_PROMPT_MAX_STRETCH, math.max(m > 0.05 and m or 10, 18))
-                            desc.Enabled = true
-                            desc.RequiresLineOfSight = false
+                local stack = {}
+                for _, ch in ipairs(workspace:GetChildren()) do
+                    table.insert(stack, ch)
+                end
+                local si = 1
+                local visited = 0
+                while si <= #stack and visited < budget do
+                    local inst = stack[si]
+                    si = si + 1
+                    visited = visited + 1
+                    if inst:IsA("ProximityPrompt") then
+                        local pos = fpwp(inst)
+                        if pos then
+                            local d = pos - center
+                            if d:Dot(d) <= rSq then
+                                inst.HoldDuration = 0
+                                local m = inst.MaxActivationDistance
+                                inst.MaxActivationDistance = math.min(FENTI_PROMPT_MAX_STRETCH, math.max(m > 0.05 and m or 10, 18))
+                                inst.Enabled = true
+                                inst.RequiresLineOfSight = false
+                            end
                         end
+                    end
+                    for _, c in ipairs(inst:GetChildren()) do
+                        table.insert(stack, c)
                     end
                 end
             end)
@@ -3026,9 +3111,8 @@ do
     -- --- ProximityPrompt: fire helpers + radius scanner (true IIFE — separate prototype; avoids PARSER_LOCAL_LIMIT) ---
     local safeFireProximityPrompt, firePromptsUnderInstanceOnly, patchAndFirePromptsOnInstance
     local spamPrompt, waitForPrompt, fireAllPrompts
-    local _isChestProximityPrompt
-    local fentiRadiusPromptStop = false
     (function()
+    _G.fentiRadiusPromptStop = false
     -- rawget(_G, …) so a rename/minify pass cannot break the native prompt API name.
     local function fentiTryGlobalFireProximityPrompt(p)
         local fpp = rawget(_G, "fireproximityprompt")
@@ -3242,7 +3326,7 @@ do
         return false
     end
     local function fentiRadiusProximityTick()
-        if fentiRadiusPromptStop then return end
+        if _G.fentiRadiusPromptStop then return end
         if not Toggles then return end
         local lp = Players.LocalPlayer
         local char = lp.Character
@@ -3291,8 +3375,11 @@ do
                     table.insert(nearParts, ch)
                 end
             end
-            for _, ch in ipairs(workspace:GetChildren()) do
-                pushIfSaintPart(ch)
+            local corpsePartsInsta = workspace:FindFirstChild("CorpseParts")
+            if corpsePartsInsta then
+                for _, ch in ipairs(corpsePartsInsta:GetChildren()) do
+                    pushIfSaintPart(ch)
+                end
             end
             local saintsFolder = workspace:FindFirstChild("saints")
             if saintsFolder then
@@ -3316,8 +3403,8 @@ do
                 local now = tick()
                 local nextPatch = rawget(_G, "fentiSaintsInstaPatchNext") or 0
                 if now >= nextPatch then
-                    _G.fentiSaintsInstaPatchNext = now + 0.7
-                    pcall(function() patchNearbyPrompts(root.Position, rSaints + 28) end)
+                    _G.fentiSaintsInstaPatchNext = now + 0.85
+                    pcall(function() patchNearbyPrompts(root.Position, rSaints + 18) end)
                 end
                 for _, ch in ipairs(nearParts) do
                     local prompt = ch:FindFirstChildWhichIsA("ProximityPrompt", true)
@@ -3332,8 +3419,15 @@ do
             if owned then
                 local hp = owned.PrimaryPart or owned:FindFirstChildWhichIsA("BasePart")
                 if hp and (hp.Position - root.Position).Magnitude <= hR then
-                    for _, d in ipairs(owned:GetDescendants()) do
-                        if d:IsA("ProximityPrompt") then fentiDeferSafeProximityFire(d) end
+                    local st, si, budget = { owned }, 1, 120
+                    while si <= #st and budget > 0 do
+                        local n = st[si]
+                        si = si + 1
+                        budget = budget - 1
+                        for _, d in ipairs(n:GetChildren()) do
+                            if d:IsA("ProximityPrompt") then fentiDeferSafeProximityFire(d) end
+                            table.insert(st, d)
+                        end
                     end
                 end
             end
@@ -3349,8 +3443,8 @@ do
         end
     end
     task.defer(function()
-        while not fentiRadiusPromptStop do
-            task.wait(isRunning and 0.42 or 0.32)
+        while not _G.fentiRadiusPromptStop do
+            task.wait(isRunning and 0.48 or 0.4)
             pcall(fentiRadiusProximityTick)
         end
     end)
@@ -3496,7 +3590,7 @@ do
     spamPrompt = spm
     waitForPrompt = wfp
     fireAllPrompts = fap
-    _isChestProximityPrompt = ichest
+    _G.fentiIsChestProximityPrompt = ichest
     end)()
     
     do
@@ -3537,24 +3631,112 @@ do
     do
     (function()
     local function getDialogueGui()
-        return player:FindFirstChild("PlayerGui") and player.PlayerGui:FindFirstChild("DialogueGui")
+        local pg = player:FindFirstChild("PlayerGui")
+        if not pg then return nil end
+        local g = pg:FindFirstChild("DialogueGui") or pg:FindFirstChild("DialogGUI")
+        if g and g:IsA("LayerCollector") then return g end
+        g = pg:FindFirstChild("DialogueGui", true)
+        if g and g:IsA("LayerCollector") then return g end
+        return nil
+    end
+    local function tryDialogueRemoteChoice(idx)
+        if not DialogueRemote then return end
+        pcall(function() DialogueRemote:FireServer("Choice", idx) end)
+        pcall(function() DialogueRemote:FireServer("SelectChoice", idx) end)
+        pcall(function() DialogueRemote:FireServer("DialogueChoice", idx) end)
+        pcall(function() DialogueRemote:FireServer("Action", "Choice", idx) end)
+        pcall(function() DialogueRemote:FireServer(idx) end)
+        pcall(function() DialogueRemote:FireServer("Pick", idx) end)
+        pcall(function() DialogueRemote:FireServer("Continue", idx) end)
+    end
+    local function fentiCollectChoiceButtonsOrdered(list)
+        local btns = {}
+        if not list then return btns end
+        for _, desc in ipairs(list:GetDescendants()) do
+            if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
+                table.insert(btns, desc)
+            end
+        end
+        table.sort(btns, function(a, b)
+            local ap, bp = a.AbsolutePosition, b.AbsolutePosition
+            if ap.Y ~= bp.Y then return ap.Y < bp.Y end
+            return ap.X < bp.X
+        end)
+        return btns
     end
     local function clickDialogueChoice(choiceNumber)
         local gui = getDialogueGui()
-        if not gui then return end
+        if not gui or not gui.Enabled then return false end
+        local function fireGuiButton(btn)
+            if not btn or not btn.Parent then return false end
+            pcall(function()
+                if btn:IsA("GuiButton") then btn:Activate() end
+            end)
+            if Support.Connections then
+                pcall(function()
+                    for _, conn in pairs(getconnections(btn.MouseButton1Click)) do
+                        if conn.Fire then conn:Fire() elseif conn.Function then task.spawn(conn.Function) end
+                    end
+                end)
+            else
+                pcall(function() firesignal(btn.MouseButton1Click) end)
+            end
+            return true
+        end
+        local clicked = false
         pcall(function()
-            local choice = gui.MainFrame.ChoiceList:FindFirstChild("Choice_" .. choiceNumber)
-            if choice then
-                local button = choice:IsA("TextButton") and choice or choice:FindFirstChildOfClass("TextButton")
-                if button then
-                    if Support.Connections then
-                        for _, conn in pairs(getconnections(button.MouseButton1Click)) do
-                            if conn.Fire then conn:Fire() elseif conn.Function then task.spawn(conn.Function) end
+            local main = gui:FindFirstChild("MainFrame", true) or gui:FindFirstChildWhichIsA("Frame", true)
+            if not main then return end
+            local list = main:FindFirstChild("ChoiceList", true) or main:FindFirstChild("Choices", true)
+                or main:FindFirstChild("Options", true)
+            if list then
+                local choice = list:FindFirstChild("Choice_" .. choiceNumber, true)
+                if not choice then
+                    for _, ch in ipairs(list:GetDescendants()) do
+                        if ch.Name == "Choice_" .. choiceNumber or ch.Name == tostring(choiceNumber) then
+                            choice = ch
+                            break
                         end
-                    else pcall(function() firesignal(button.MouseButton1Click) end) end
+                    end
+                end
+                if choice then
+                    if choice:IsA("GuiButton") then
+                        clicked = fireGuiButton(choice)
+                    else
+                        local button = choice:FindFirstChildWhichIsA("TextButton", true)
+                            or choice:FindFirstChildWhichIsA("ImageButton", true)
+                        if button then clicked = fireGuiButton(button) end
+                    end
+                end
+                if not clicked then
+                    -- Horse vendor: "Show me another ($20)." — match "another"/"show me", not only "reroll".
+                    local alts = choiceNumber == 2 and {
+                        "show me another", "another", "different horse", "different",
+                        "reroll", "try again", "again", "retry", "skip", "next",
+                    } or { "i'll take", "ill take", "take it", "accept", "take", "keep", "ok", "confirm", "yes", "buy" }
+                    for _, desc in ipairs(list:GetDescendants()) do
+                        if desc:IsA("TextButton") or desc:IsA("ImageButton") then
+                            local raw = (desc:IsA("TextButton") and desc.Text) or desc.Name or ""
+                            local txt = string.lower(raw)
+                            for _, key in ipairs(alts) do
+                                if string.find(txt, key, 1, true) then
+                                    clicked = fireGuiButton(desc)
+                                    break
+                                end
+                            end
+                            if clicked then break end
+                        end
+                    end
+                end
+                if not clicked and choiceNumber >= 1 and choiceNumber <= 12 then
+                    local ordered = fentiCollectChoiceButtonsOrdered(list)
+                    local btn = ordered[choiceNumber]
+                    if btn then clicked = fireGuiButton(btn) end
                 end
             end
         end)
+        if not clicked then tryDialogueRemoteChoice(choiceNumber) end
+        return clicked
     end
     local function instaDialogNPC(npcName)
         local npc = getNPCModel(npcName)
@@ -3575,40 +3757,72 @@ do
         Library:Notify("Insta dialog → " .. npcName, 2)
     end
     local function dialogueHasBracket()
-        local gui = getDialogueGui()
-        if not gui then return false end
-        local npcText = gui.MainFrame:FindFirstChild("NPCText")
-        return npcText and (npcText.Text:find("【") or npcText.Text:find("「")) or false
+        local t = getDialogueText()
+        if t == "" then return false end
+        -- Japanese brackets / corner quotes = rare roll styling (not ASCII ($20) prices in horse text).
+        if t:find("【", 1, true) or t:find("「", 1, true) or t:find("」", 1, true) or t:find("】", 1, true) then
+            return true
+        end
+        local low = string.lower(t)
+        if string.find(low, "legendary", 1, true) or string.find(low, "mythic", 1, true) then return true end
+        if string.find(low, "divine", 1, true) or string.find(low, "exotic", 1, true) then return true end
+        if string.find(low, "★", 1, true) or string.find(low, "ssr", 1, true) then return true end
+        return false
     end
     local function getDialogueText()
         local gui = getDialogueGui()
         if not gui then return "" end
-        local npcText = gui.MainFrame:FindFirstChild("NPCText")
+        local main = gui:FindFirstChild("MainFrame", true) or gui:FindFirstChildWhichIsA("Frame", true)
+        if not main then return "" end
+        local npcText = main:FindFirstChild("NPCText", true) or main:FindFirstChildWhichIsA("TextLabel", true)
         return npcText and npcText.Text or ""
     end
     local function startAutoDialogue()
-        if dialogueConnection then dialogueConnection:Disconnect() end
+        if dialogueRerollThread ~= nil then
+            pcall(function() task.cancel(dialogueRerollThread) end)
+            dialogueRerollThread = nil
+        end
         rerollCount = 0
-        local dlgSkip = 0
-        dialogueConnection = RunService.Heartbeat:Connect(function()
-            if not autoDialogueEnabled then return end
-            dlgSkip = dlgSkip + 1; if dlgSkip < 5 then return end; dlgSkip = 0
-            if dialogueHasBracket() then
-                clickDialogueChoice(1); autoDialogueEnabled = false
-                if dialogueConnection then dialogueConnection:Disconnect(); dialogueConnection = nil end
-                Library:Notify("Got rare result after " .. rerollCount .. " rerolls!\n" .. getDialogueText():sub(1, 80), 8)
-                if Toggles.AutoDialogue then Toggles.AutoDialogue:SetValue(false) end
-                if Labels.Reroll then Labels.Reroll:SetText("Rerolls: " .. rerollCount .. " (FOUND!)") end
-            else
-                clickDialogueChoice(2); rerollCount = rerollCount + 1
-                if Labels.Reroll then Labels.Reroll:SetText("Rerolls: " .. rerollCount) end
+        dialogueRerollThread = task.spawn(function()
+            local noDialogueWarned = false
+            local stallNoGui = 0
+            while autoDialogueEnabled do
+                local gui = getDialogueGui()
+                if not gui or not gui.Enabled then
+                    stallNoGui = stallNoGui + 1
+                    if not noDialogueWarned and stallNoGui > 20 then
+                        noDialogueWarned = true
+                        Library:Notify("Horse reroll: open the NPC dialogue first, then use auto reroll.", 5)
+                    end
+                    task.wait(0.15)
+                else
+                    stallNoGui = 0
+                    if dialogueHasBracket() then
+                        clickDialogueChoice(1)
+                        tryDialogueRemoteChoice(1)
+                        autoDialogueEnabled = false
+                        Library:Notify("Got rare result after " .. rerollCount .. " rerolls!\n" .. getDialogueText():sub(1, 80), 8)
+                        if Toggles.AutoDialogue then Toggles.AutoDialogue:SetValue(false) end
+                        if Labels.Reroll then Labels.Reroll:SetText("Rerolls: " .. rerollCount .. " (FOUND!)") end
+                        break
+                    else
+                        clickDialogueChoice(2)
+                        tryDialogueRemoteChoice(2)
+                        rerollCount = rerollCount + 1
+                        if Labels.Reroll then Labels.Reroll:SetText("Rerolls: " .. rerollCount) end
+                        task.wait(0.4)
+                    end
+                end
             end
-            task.wait(0.5)
+            dialogueRerollThread = nil
         end)
     end
     local function stopAutoDialogue()
         autoDialogueEnabled = false
-        if dialogueConnection then dialogueConnection:Disconnect(); dialogueConnection = nil end
+        if dialogueRerollThread ~= nil then
+            pcall(function() task.cancel(dialogueRerollThread) end)
+            dialogueRerollThread = nil
+        end
     end
     _G.fentiDialogue = {
         instaDialogNPC = instaDialogNPC,
@@ -3725,7 +3939,14 @@ do
         task.wait(0.03)
     end
 
-    -- Long cast (camera cone + 60–100 studs) — optional alt; short cast is default (less stall after FireServer).
+    -- Flatten look to XZ so looking down doesn’t drop the aim at your feet; cast stays “out there” along forward.
+    local function fentiHorizLook(lv)
+        if typeof(lv) ~= "Vector3" then return Vector3.new(0, 0, -1) end
+        local h = Vector3.new(lv.X, 0, lv.Z)
+        if h.Magnitude < 0.08 then return Vector3.new(0, 0, -1) end
+        return h.Unit
+    end
+    -- Long cast: horizontal forward cone, farther than old 60–100 + tight spread (was 30° + full pitch → “in my face”).
     local function getRandomVector()
         local holdCF = rawget(_G, "fentiFishingHoldCF")
         if not character or not character.Parent or not humanoidRootPart then
@@ -3734,29 +3955,31 @@ do
         if not humanoidRootPart and typeof(holdCF) ~= "CFrame" then return Vector3.zero end
         local playerPos = (typeof(holdCF) == "CFrame" and holdCF.Position) or humanoidRootPart.Position
         local camera = workspace.CurrentCamera
-        local cameraDirection = (camera and camera.CFrame.LookVector)
+        local rawLook = (camera and camera.CFrame.LookVector)
             or (typeof(holdCF) == "CFrame" and holdCF.LookVector)
             or (humanoidRootPart and humanoidRootPart.CFrame.LookVector)
             or Vector3.new(0, 0, -1)
-        local spreadAngle = math.rad(30)
-        local randomAngle1 = (math.random() - 0.5) * spreadAngle
-        local randomAngle2 = (math.random() - 0.5) * spreadAngle
-        local rotatedDirection = (CFrame.new(Vector3.zero, cameraDirection) * CFrame.Angles(randomAngle1, randomAngle2, 0)).LookVector
-        local throwDistance = math.random(60, 100)
+        local forward = fentiHorizLook(rawLook)
+        local spreadYaw = math.rad(11)
+        local spreadPitch = math.rad(5)
+        local yaw = (math.random() - 0.5) * 2 * spreadYaw
+        local pitch = (math.random() - 0.5) * 2 * spreadPitch
+        local rotatedDirection = (CFrame.new(Vector3.zero, forward) * CFrame.Angles(pitch, yaw, 0)).LookVector
+        local throwDistance = math.random(88, 128)
         return playerPos + rotatedDirection * throwDistance
     end
-    -- Working-game pattern: HRP forward ~20 studs (optional alt cast).
+    -- Working-game pattern: HRP forward (longer so manual/short path isn’t underfoot).
     local function getShortCastAim()
         if humanoidRootPart then
-            return (humanoidRootPart.CFrame * CFrame.new(0, 0, -20)).Position
+            return (humanoidRootPart.CFrame * CFrame.new(0, 0, -48)).Position
         end
         local holdCF = rawget(_G, "fentiFishingHoldCF")
         if typeof(holdCF) == "CFrame" then
-            return (holdCF * CFrame.new(0, 0, -20)).Position
+            return (holdCF * CFrame.new(0, 0, -48)).Position
         end
         return Vector3.zero
     end
-    -- Fishing Bot v4 / bridgewestern style: HRP facing, 15° spread, 60–100 studs, slight Y jitter (matches working cast).
+    -- Legacy path: same horizontal-forward idea + slightly longer reach.
     local function legacyGetRandomVector()
         if not character or not character.Parent or not humanoidRootPart then
             refreshCharacter()
@@ -3768,11 +3991,12 @@ do
         local facing = (humanoidRootPart and humanoidRootPart.CFrame.LookVector)
             or (typeof(holdCF) == "CFrame" and holdCF.LookVector)
             or Vector3.new(0, 0, -1)
-        local spread = math.rad(15)
-        local dir = (CFrame.new(Vector3.zero, facing) * CFrame.Angles(math.random() * spread * 0.5, (math.random() - 0.5) * spread * 2, 0)).LookVector
-        local dist = math.random(60, 100)
+        local forward = fentiHorizLook(facing)
+        local spread = math.rad(10)
+        local dir = (CFrame.new(Vector3.zero, forward) * CFrame.Angles((math.random() - 0.5) * spread, (math.random() - 0.5) * 2 * spread, 0)).LookVector
+        local dist = math.random(85, 125)
         local target = pos + dir * dist
-        return Vector3.new(target.X, pos.Y - math.random(1, 5), target.Z)
+        return Vector3.new(target.X, pos.Y - math.random(1, 4), target.Z)
     end
     -- Keep spring constraints off briefly after Primary so AlignPosition does not fight the new line/bobber (fixes 2nd+ cast “no bobber” loops).
     local function fentiArmCastPhysicsFreeWindow(duration)
@@ -3787,7 +4011,7 @@ do
             _G.fentiCastingUnanchor = nil
         end)
     end
-    -- Cast: bait + 0.3s pause, then camera cone 60–100 studs (low hitch vs short HRP-only cast).
+    -- Cast: bait + 0.3s pause, then horizontal-forward aim ~88–128 studs (low hitch vs short HRP-only cast).
     local function castRod()
         if Labels.Status then Labels.Status:SetText("Status: Casting...") end
         if not character or not character.Parent or not humanoidRootPart then
@@ -3838,7 +4062,7 @@ do
         if not humanoidRootPart then return nil end
         local r = getUseToolRemote()
         if not r then return nil end
-        local aim = (humanoidRootPart.CFrame * CFrame.new(0, 0, -20)).Position
+        local aim = (humanoidRootPart.CFrame * CFrame.new(0, 0, -48)).Position
         r:FireServer("FishingRod", "Primary", aim)
         fentiArmCastPhysicsFreeWindow(0.55)
         return aim
@@ -4032,7 +4256,10 @@ do
                 for _, ch in ipairs(cur:GetChildren()) do
                     n = n + 1
                     if n > maxNodes then return nil end
-                    if ch:IsA("ProximityPrompt") and not _isChestProximityPrompt(ch) then return ch end
+                    if ch:IsA("ProximityPrompt") then
+                        local ic = rawget(_G, "fentiIsChestProximityPrompt")
+                        if not ic or not ic(ch) then return ch end
+                    end
                     table.insert(stack, ch)
                 end
             end
@@ -4129,8 +4356,9 @@ do
         local function fireFishingBobberPrompt(fishingPart)
             if not fishingPart or not fishingPart.Parent then return false end
             local prompt = nil
+            local ic = rawget(_G, "fentiIsChestProximityPrompt")
             for _, child in pairs(fishingPart:GetDescendants()) do
-                if child:IsA("ProximityPrompt") and not _isChestProximityPrompt(child) then
+                if child:IsA("ProximityPrompt") and (not ic or not ic(child)) then
                     prompt = child
                     break
                 end
@@ -4216,6 +4444,9 @@ do
     end)()
     end
 
+    -- [FENTI-17·loop] Bobber find + main fishing loop — separate IIFE (Luau ~200 locals per function; high-end executors compile stricter).
+    do
+    (function()
     -- Prefer red bobber (~RGB 255,60,60), prompts, beam — avoid random workspace "Part" debris.
     -- castAimHint: world position where *this* cast targeted; avoids locking onto last cast's leftover bobber.
     -- deepScan: bounded BFS from workspace roots — never workspace:GetDescendants() (huge alloc + hitch).
@@ -4465,6 +4696,8 @@ do
         _G.fentiLastFishCastAim = nil
         stopTPLoop()
         unlockRootMotion()
+    end
+    end)()
     end
 
     -- [FENTI-17b] QTE auto-mash (IIFE — register cap)
@@ -4956,38 +5189,54 @@ do
         end
 
         refreshCharacter()
-        task.wait(0.12)
-        pcall(function()
-            if humanoidRootPart and part.Parent then
-                patchNearbyPrompts(humanoidRootPart.Position, 72)
-                patchAndFirePromptsOnInstance(part, "saintsClaim", 0.12)
-            end
-        end)
-        task.wait(0.2)
+        task.wait(0.08)
+
         local claimedOk = false
-        for _round = 1, math.max(1, saintsClaimPromptRounds) do
-            if not part:IsDescendantOf(workspace) then break end
-            refreshCharacter()
-            local pr = waitForPrompt(part, 2.2)
-            if pr then
-                spamPrompt(pr, 10, 0.1)
-            else
-                pcall(function()
-                    if humanoidRootPart then patchNearbyPrompts(humanoidRootPart.Position, 72) end
-                end)
-                for _ = 1, 10 do
-                    pcall(function()
-                        local p2 = part:FindFirstChildWhichIsA("ProximityPrompt", true)
-                        if p2 and _G.fentiFireProximityMinimal then _G.fentiFireProximityMinimal(p2) end
-                    end)
-                    task.wait(0.07)
+        local ichestF = rawget(_G, "fentiIsChestProximityPrompt")
+        local function fireSaintPromptOnce()
+            pcall(function()
+                if not humanoidRootPart or not part.Parent then return end
+                local p2 = part:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if not p2 then return end
+                if ichestF and ichestF(p2) then return end
+                if _G.fentiFireProximityMinimal then
+                    _G.fentiFireProximityMinimal(p2)
+                elseif type(safeFireProximityPrompt) == "function" then
+                    safeFireProximityPrompt(p2)
                 end
-                fireAllPrompts(part, 4)
-            end
-            task.wait(0.32)
-            if hasSaintPart(partName) then
-                claimedOk = true
-                break
+            end)
+        end
+
+        for _ = 1, 12 do
+            if not part:IsDescendantOf(workspace) then break end
+            fireSaintPromptOnce()
+            task.wait(0.06)
+            if hasSaintPart(partName) then claimedOk = true break end
+        end
+
+        if not claimedOk then
+            pcall(function()
+                if humanoidRootPart and part.Parent then
+                    patchNearbyPrompts(humanoidRootPart.Position, 52)
+                    patchAndFirePromptsOnInstance(part, "saintsClaim", 0.1)
+                end
+            end)
+            task.wait(0.15)
+            for _round = 1, math.max(1, saintsClaimPromptRounds) do
+                if not part:IsDescendantOf(workspace) then break end
+                refreshCharacter()
+                local pr = waitForPrompt(part, 1.8)
+                if pr then
+                    spamPrompt(pr, 8, 0.08)
+                else
+                    pcall(function()
+                        if humanoidRootPart then patchNearbyPrompts(humanoidRootPart.Position, 52) end
+                    end)
+                    for _ = 1, 8 do fireSaintPromptOnce(); task.wait(0.06) end
+                    fireAllPrompts(part, 3)
+                end
+                task.wait(0.22)
+                if hasSaintPart(partName) then claimedOk = true break end
             end
         end
 
@@ -5061,7 +5310,11 @@ do
                 if ch:IsA("BasePart") and matchesSaintsFilter(ch.Name) and not hasSaintPart(ch.Name) then
                     onWorldPart(ch, fromPoll)
                 elseif ch:IsA("Model") then
-                    for _, d in ipairs(ch:GetDescendants()) do
+                    local bp = ch.PrimaryPart or ch:FindFirstChildWhichIsA("BasePart")
+                    if bp and matchesSaintsFilter(bp.Name) and not hasSaintPart(bp.Name) then
+                        onWorldPart(bp, fromPoll)
+                    end
+                    for _, d in ipairs(ch:GetChildren()) do
                         if d:IsA("BasePart") and matchesSaintsFilter(d.Name) and not hasSaintPart(d.Name) then
                             onWorldPart(d, fromPoll)
                         end
@@ -5109,20 +5362,30 @@ do
             end))
         end
 
+        local hookedCorpsePartsRoots = {}
+        local function hookCorpsePartsTree(cp)
+            if not cp or hookedCorpsePartsRoots[cp] then return end
+            hookedCorpsePartsRoots[cp] = true
+            table.insert(saintsConns, cp.ChildAdded:Connect(function(inst)
+                if not saintsEnabled then return end
+                if inst:IsA("BasePart") then
+                    task.defer(function()
+                        if inst.Parent then onWorldPart(inst, false) end
+                    end)
+                end
+            end))
+        end
+
         scanAllSaintsParts(false)
         local existingSaints = workspace:FindFirstChild("saints")
         if existingSaints then hookSaintsWatchTree(existingSaints) end
+        local cpExisting = workspace:FindFirstChild("CorpseParts")
+        if cpExisting then hookCorpsePartsTree(cpExisting) end
 
         table.insert(saintsConns, workspace.ChildAdded:Connect(function(ch)
             if ch.Name == "saints" then hookSaintsWatchTree(ch) end
+            if ch.Name == "CorpseParts" then hookCorpsePartsTree(ch) end
             onWorkspaceChildAdded(ch)
-        end))
-        table.insert(saintsConns, workspace.DescendantAdded:Connect(function(inst)
-            if not inst:IsA("BasePart") then return end
-            local par = inst.Parent
-            if par and par.Name == "CorpseParts" and par:IsDescendantOf(workspace) then
-                onWorldPart(inst, false)
-            end
         end))
     
         saintsPollThread = task.spawn(function()
@@ -5483,7 +5746,7 @@ do
     
     -- [FENTI-22·players] Local player (anti-ragdoll, leaderstats streak) + ESP others
     if Tabs.Players then do
-    local PlayersYou = Tabs.Players:AddLeftGroupbox("You", "user-circle")
+    local PlayersYou = Tabs.Players:AddLeftGroupbox("You", "circle-user")
     Labels.KillStreak = PlayersYou:AddLabel("<b>Kill streak:</b> —")
     PlayersYou:AddToggle("KillstreakTracker", {
         Text = "Track leaderstats streak",
@@ -5503,7 +5766,80 @@ do
             Library:Notify(v and "Anti-ragdoll on" or "Anti-ragdoll off", 2)
         end,
     })
+    PlayersYou:AddToggle("AntiAFK", {
+        Text = "Anti-AFK (VirtualUser + idle hook strip)",
+        Default = true,
+        Callback = function(v)
+            Library:Notify(v and "Anti-AFK on (~40s pulse)" or "Anti-AFK off", 3)
+        end,
+    })
     PlayersYou:AddLabel("killstreak tracker", true)
+    local function fentiOtherPlayerNamesForTp()
+        local names = {}
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= player then table.insert(names, plr.Name) end
+        end
+        table.sort(names)
+        return names
+    end
+    local PlayersTP = Tabs.Players:AddRightGroupbox("Player TP", "navigation")
+    PlayersTP:AddLabel("Soft-move to another player (same as Teleport tab).", true)
+    PlayersTP:AddDropdown("PlayerTPPick", {
+        Text = "Player",
+        Values = fentiOtherPlayerNamesForTp(),
+        Default = nil,
+        AllowNull = true,
+        Searchable = true,
+    })
+    PlayersTP:AddButton({
+        Text = "Refresh list",
+        Func = function()
+            pcall(function()
+                if Options.PlayerTPPick then Options.PlayerTPPick:SetValues(fentiOtherPlayerNamesForTp()) end
+            end)
+            Library:Notify("Player list refreshed.", 2)
+        end,
+    })
+    PlayersTP:AddButton({
+        Text = "Teleport to selected",
+        Func = function()
+            local sel = Options.PlayerTPPick and Options.PlayerTPPick.Value
+            if type(sel) ~= "string" or sel == "" then
+                Library:Notify("Select a player from the list.", 3)
+                return
+            end
+            local plr = Players:FindFirstChild(sel)
+            if not plr or not plr:IsA("Player") or plr == player then
+                Library:Notify("Player not found. Refresh list.", 3)
+                return
+            end
+            refreshCharacter()
+            local ch = plr.Character
+            local root = ch and ch:FindFirstChild("HumanoidRootPart")
+            if not root then
+                Library:Notify("They have no character / HRP.", 3)
+                return
+            end
+            smartTeleport(root.CFrame * CFrame.new(0, 0, 4))
+            Library:Notify("Moved near " .. sel .. ".", 2)
+        end,
+    })
+    pcall(function()
+        Players.PlayerAdded:Connect(function()
+            task.defer(function()
+                pcall(function()
+                    if Options.PlayerTPPick then Options.PlayerTPPick:SetValues(fentiOtherPlayerNamesForTp()) end
+                end)
+            end)
+        end)
+        Players.PlayerRemoving:Connect(function()
+            task.defer(function()
+                pcall(function()
+                    if Options.PlayerTPPick then Options.PlayerTPPick:SetValues(fentiOtherPlayerNamesForTp()) end
+                end)
+            end)
+        end)
+    end)
     local PlayersESP = Tabs.Players:AddLeftGroupbox("Player ESP", "eye")
     local PlayersESPRight = Tabs.Players:AddRightGroupbox("ESP style", "palette")
     
@@ -5658,6 +5994,15 @@ do
     local SaintsFarm = Tabs.Saints:AddLeftGroupbox("Saints", "crosshair")
     local SaintsStyle = Tabs.Saints:AddRightGroupbox("Pickup style", "shield")
     SaintsFarm:AddLabel("Safe hop after claim uses the same move as the Teleport tab.", true)
+    SaintsFarm:AddDivider()
+    SaintsFarm:AddButton({
+        Text = "Teleport to safe zone",
+        Func = function()
+            refreshCharacter()
+            smartTeleport(SAFE_ZONE_POS)
+            Library:Notify("Safe zone — moved.", 2)
+        end,
+    })
     SaintsFarm:AddDivider()
     SaintsFarm:AddToggle("SaintsAutoFarm", {
         Text = "Auto pickup saints",
@@ -5859,35 +6204,71 @@ do
         end
     end
 
-    local function d4cSelectPlayer()
-        local input = (Options.D4CTargetPlayer and Options.D4CTargetPlayer.Value or ""):lower():gsub("%s+", "")
-        if input == "" then
+    local function d4cAllServerPlayerNames()
+        local names = {}
+        for _, plr in ipairs(Players:GetPlayers()) do
+            table.insert(names, plr.Name)
+        end
+        table.sort(names)
+        return names
+    end
+
+    local function d4cApplyTargetFromDropdown(sel)
+        if type(sel) ~= "string" or sel == "" then
             d4cSelectedPlayer = nil
             d4cUpdateSelectedLabel()
             return
         end
-        for _, plr in ipairs(Players:GetPlayers()) do
-            if plr.Name:lower() == input or (plr.DisplayName and plr.DisplayName:lower() == input) then
-                d4cSelectedPlayer = plr
-                d4cPreviousRagdollState = false
-                d4cUpdateSelectedLabel()
-                if Toggles.D4CKnifeThrow and Toggles.D4CKnifeThrow.Value then
-                    task.wait(0.4)
-                    d4cThrowKnives()
-                end
-                return
-            end
+        local plr = Players:FindFirstChild(sel)
+        if not plr or not plr:IsA("Player") then
+            d4cSelectedPlayer = nil
+            d4cUpdateSelectedLabel()
+            return
         end
-        d4cSelectedPlayer = nil
+        d4cSelectedPlayer = plr
+        d4cPreviousRagdollState = false
         d4cUpdateSelectedLabel()
+        if Toggles.D4CKnifeThrow and Toggles.D4CKnifeThrow.Value then
+            task.wait(0.4)
+            d4cThrowKnives()
+        end
     end
 
-    D4CLeft:AddInput("D4CTargetPlayer", {
+    D4CLeft:AddDropdown("D4CTargetPick", {
         Text = "Target player",
-        Default = "",
-        Placeholder = "Name or display name…",
+        Values = d4cAllServerPlayerNames(),
+        Default = nil,
+        AllowNull = true,
+        Searchable = true,
+        Callback = function(val)
+            d4cApplyTargetFromDropdown(val)
+        end,
     })
-    D4CLeft:AddButton({ Text = "Select target", Func = d4cSelectPlayer })
+    D4CLeft:AddButton({
+        Text = "Refresh player list",
+        Func = function()
+            pcall(function()
+                if Options.D4CTargetPick then Options.D4CTargetPick:SetValues(d4cAllServerPlayerNames()) end
+            end)
+            Library:Notify("D4C: player list refreshed.", 2)
+        end,
+    })
+    pcall(function()
+        Players.PlayerAdded:Connect(function()
+            task.defer(function()
+                pcall(function()
+                    if Options.D4CTargetPick then Options.D4CTargetPick:SetValues(d4cAllServerPlayerNames()) end
+                end)
+            end)
+        end)
+        Players.PlayerRemoving:Connect(function()
+            task.defer(function()
+                pcall(function()
+                    if Options.D4CTargetPick then Options.D4CTargetPick:SetValues(d4cAllServerPlayerNames()) end
+                end)
+            end)
+        end)
+    end)
 
     d4cSelectedLabel = D4CLeft:AddLabel("Selected: None")
     d4cHealthLabel = D4CLeft:AddLabel("Health: N/A")
@@ -6188,7 +6569,7 @@ do
         stopESP(); pcall(uninstallGetMousePosHook)
         stopTPLoop(); unlockRootMotion()
         if _G.fentiStopFishingPoseHold then pcall(_G.fentiStopFishingPoseHold) end
-        fentiRadiusPromptStop = true
+        _G.fentiRadiusPromptStop = true
         pcall(function()
             if _G.fentiSelfAuraCharConn then
                 _G.fentiSelfAuraCharConn:Disconnect()
@@ -6238,7 +6619,9 @@ do
     -- ----------------------------------------------------------------------------
     -- [FENTI-23] 23. STARTUP (after UI — keeps main chunk locals down)
     -- ----------------------------------------------------------------------------
-    task.spawn(antiAFKLoop)
+    task.defer(function()
+        task.spawn(antiAFKLoop)
+    end)
     -- Do not auto-start corpse RS/workspace listeners: "Everything" preset enables Teleport; games that
     -- use remote/logservice spoofchecks often fingerprint extra DescendantAdded on ReplicatedStorage.
     -- Turn on "Detect Corpse Spawns" in Teleport → Corpse when you want it.
