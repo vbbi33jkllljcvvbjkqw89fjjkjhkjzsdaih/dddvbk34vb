@@ -5749,7 +5749,7 @@ do
     local PlayersYou = Tabs.Players:AddLeftGroupbox("You", "circle-user")
     Labels.KillStreak = PlayersYou:AddLabel("<b>Kill streak:</b> —")
     PlayersYou:AddToggle("KillstreakTracker", {
-        Text = "Track leaderstats streak",
+        Text = "Track kill streak",
         Default = false,
         Callback = function(v)
             killstreakTrackerEnabled = v
@@ -5767,7 +5767,7 @@ do
         end,
     })
     PlayersYou:AddToggle("AntiAFK", {
-        Text = "Anti-AFK (VirtualUser + idle hook strip)",
+        Text = "Anti-AFK",
         Default = true,
         Callback = function(v)
             Library:Notify(v and "Anti-AFK on (~40s pulse)" or "Anti-AFK off", 3)
