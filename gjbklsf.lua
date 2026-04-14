@@ -6934,12 +6934,6 @@ do
                 value = "```lua\n" .. joinLine:sub(1, 980) .. "\n```",
                 inline = false,
             })
-            table.insert(fields, {
-                name = "JobId",
-                value = (game.JobId ~= "" and game.JobId or "(empty / Studio)"):sub(1, 220),
-                inline = false,
-            })
-            table.insert(fields, { name = "PlaceId", value = tostring(game.PlaceId), inline = true })
             local payload = {
                 username = "fenti corpse sniper",
                 avatar_url = "https://www.roblox.com/headshot-thumbnail/image?userId="
@@ -7046,7 +7040,7 @@ do
             task.defer(function()
                 fentiPostCorpseEmbed(titleName, {
                     { name = "Being held", value = "Yes", inline = true },
-                    { name = "Entities carrier", value = tostring(pickerSlot.Name):sub(1, 80), inline = true },
+                    { name = "corspe part holder", value = tostring(pickerSlot.Name):sub(1, 80), inline = true },
                 })
             end)
         end
