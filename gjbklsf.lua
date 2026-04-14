@@ -1570,14 +1570,14 @@ do
     -- One short line on Obsidian Loading sidebar (see [FENTI-22] CreateLoading).
     local FENTI_HUB_CHANGELOG_BLURB = "Autofarm tab · unified chest/saints prompts · map TP · lumber/tree farm"
     local BEST_FISHING_SPOT = CFrame.new(-4883, 44.999, -2118)
-    -- Built-in alternate spot (low ground / sussy coords from user).
-    local FISHING_SPOT_SUSSY = CFrame.new(-6160.69091796875, 2.9873154163360596, -2545.29541015625)
+    -- Built-in high cliff spot from coord viewer screenshot.
+    local FISHING_SPOT_CLIFF = CFrame.new(-1548.212, 208.850, -2611.449)
     local SAFE_ZONE_POS = CFrame.new(0, 50, 0)
-    -- User-defined fishing TP presets (name + CFrame). "Default (hub)" / "Sussy spot" are hub builtins (not in JSON).
+    -- User-defined fishing TP presets (name + CFrame). Built-ins are not persisted in JSON.
     local fentiCustomFishSpotEntries = {}
     local fentiSelectedFishSpotName = "Default (hub)"
     local function fentiFishSpotDropdownValues()
-        local v = { "Default (hub)", "Sussy spot" }
+        local v = { "Default (hub)", "Cliff spot" }
         for _, e in ipairs(fentiCustomFishSpotEntries) do
             table.insert(v, e.name)
         end
@@ -1587,8 +1587,8 @@ do
         if fentiSelectedFishSpotName == "Default (hub)" or fentiSelectedFishSpotName == "" then
             return BEST_FISHING_SPOT
         end
-        if fentiSelectedFishSpotName == "Sussy spot" then
-            return FISHING_SPOT_SUSSY
+        if fentiSelectedFishSpotName == "Cliff spot" then
+            return FISHING_SPOT_CLIFF
         end
         for _, e in ipairs(fentiCustomFishSpotEntries) do
             if e.name == fentiSelectedFishSpotName then
@@ -1623,7 +1623,7 @@ do
         if type(list) ~= "table" then return end
         for _, row in ipairs(list) do
             if type(row) == "table" and type(row.name) == "string" and row.name ~= "" then
-                if row.name ~= "Default (hub)" and row.name ~= "Sussy spot" then
+                if row.name ~= "Default (hub)" and row.name ~= "Cliff spot" then
                     local px, py, pz = tonumber(row.x), tonumber(row.y), tonumber(row.z)
                     if px and py and pz then
                         local pos = Vector3.new(px, py, pz)
@@ -1817,13 +1817,15 @@ do
     local function fentiSaintsPartEligible(partName)
         if type(partName) ~= "string" then return false end
         local ln = string.lower(partName)
+        local norm = fentiNormalizeSaintsPartName(partName)
+        -- Noise part; never pick/log this pseudo piece.
+        if norm == "saintsunknown" then return false end
         local looksSaint = string.find(ln, "saints", 1, true) or string.find(ln, "saint", 1, true)
         if not looksSaint then return false end
         local anySelected = false
         for _, v in pairs(saintsPartFilter) do if v then anySelected = true; break end end
         if not anySelected then return true end
         if saintsPartFilter[partName] == true then return true end
-        local norm = fentiNormalizeSaintsPartName(partName)
         for key, on in pairs(saintsPartFilter) do
             if on and fentiNormalizeSaintsPartName(key) == norm then return true end
         end
@@ -1836,6 +1838,8 @@ do
     -- Real catch count: only bump on server/client catch notifications (not bite/reel heuristics).
     local lastFentiCatchNotifAt = 0
     local lastFentiChestPromptSpam = 0
+    local fentiFishNeedSpotShift = false
+    local fentiFishLastSpotShiftAt = 0
     local corpseListenerActive, corpseListenerConn = false, nil
     local activeConnections, qteInProgress = {}, false
     local killstreakTrackerEnabled, antiRagdollEnabled = false, false
@@ -5755,12 +5759,85 @@ do
             end
         end)
         _G.fentiSuppressFishHold = false
+        fentiFishNeedSpotShift = false
         local castAttempts, castSuccesses = 0, 0
         local lastCastAim = nil
         local noBobberStreak = 0
+        local function fentiNextFishingPresetName()
+            local vals = fentiFishSpotDropdownValues()
+            if #vals <= 1 then return nil end
+            local cur = fentiSelectedFishSpotName
+            local idx = 1
+            for i, n in ipairs(vals) do
+                if n == cur then idx = i; break end
+            end
+            for step = 1, #vals - 1 do
+                local c = vals[((idx - 1 + step) % #vals) + 1]
+                if c ~= cur then return c end
+            end
+            return nil
+        end
+        local function fentiMoveFishingSpot(reason)
+            local now = tick()
+            if (now - fentiFishLastSpotShiftAt) < 3.5 then return false end
+            fentiFishLastSpotShiftAt = now
+            refreshCharacter()
+            if not humanoidRootPart then return false end
+            local moved = false
+            local pickedPreset = nil
+            local nextPreset = fentiNextFishingPresetName()
+            if nextPreset then
+                pickedPreset = nextPreset
+                fentiSelectedFishSpotName = nextPreset
+                pcall(function()
+                    if Options and Options.FishSpotPick then
+                        Options.FishSpotPick:SetValues(fentiFishSpotDropdownValues())
+                        Options.FishSpotPick:SetValue(nextPreset)
+                    end
+                end)
+                local dest = fentiGetFishSpotCFrame()
+                moved = _G.fentiSoftTeleportTo and _G.fentiSoftTeleportTo(dest, "fish_spooked_preset") == true or false
+                if not moved then
+                    smartTeleport(dest)
+                    moved = true
+                end
+                rawset(_G, "fentiFishingReturnCFrame", dest)
+            else
+                local base = rawget(_G, "fentiFishingReturnCFrame")
+                if typeof(base) ~= "CFrame" then base = humanoidRootPart.CFrame end
+                local ang = math.rad(math.random(0, 359))
+                local dist = math.random(52, 92)
+                local pos = base.Position + Vector3.new(math.cos(ang) * dist, 1.8, math.sin(ang) * dist)
+                local dest = CFrame.lookAt(pos, pos + base.LookVector)
+                moved = _G.fentiSoftTeleportTo and _G.fentiSoftTeleportTo(dest, "fish_spooked_nudge") == true or false
+                if not moved then
+                    smartTeleport(dest)
+                    moved = true
+                end
+                rawset(_G, "fentiFishingReturnCFrame", dest)
+            end
+            if moved then
+                if pickedPreset then
+                    banLog("FISH", "Spot changed (spooked -> " .. pickedPreset .. ")")
+                    Library:Notify("Fishing: spooked spot -> " .. pickedPreset, 2.5)
+                else
+                    banLog("FISH", "Spot changed (spooked -> nearby)")
+                    Library:Notify("Fishing: spooked spot -> moved nearby", 2.5)
+                end
+            end
+            return moved
+        end
         -- One FireServer("FishingRod","Primary", aim) per loop; then wait for bobber — no back-to-back casts.
         local FENTI_POST_CAST_SETTLE = 2.85
         while isRunning do
+            if fentiFishNeedSpotShift then
+                fentiFishNeedSpotShift = false
+                if Labels.Status then Labels.Status:SetText("Status: Spot spooked — moving...") end
+                pcall(function() _G.fentiFish.pickupRod() end)
+                task.wait(0.2)
+                pcall(function() fentiMoveFishingSpot("spooked_notification") end)
+                task.wait(0.25)
+            end
             castAttempts = castAttempts + 1
             _G.fentiFishAssistCastGen = (rawget(_G, "fentiFishAssistCastGen") or 0) + 1
             if not character or not character.Parent or not humanoidRootPart or not humanoidRootPart.Parent then
@@ -6243,14 +6320,26 @@ do
         return fentiSaintsPartEligible(name)
     end
     
-    local function getMyEntityFolder()
+    local function getSaintsEntitiesRoots()
+        local roots = {}
         local saints = workspace:FindFirstChild("saints")
-        if not saints then return nil end
-        local ents = saints:FindFirstChild("Entities")
-        if not ents then return nil end
-        return ents:FindFirstChild(player.Name)
-            or ents:FindFirstChild(player.DisplayName)
-            or ents:FindFirstChild(tostring(player.UserId))
+        if saints then
+            local ents = saints:FindFirstChild("Entities")
+            if ents then roots[#roots + 1] = ents end
+        end
+        local wsEnts = workspace:FindFirstChild("Entities")
+        if wsEnts then roots[#roots + 1] = wsEnts end
+        return roots
+    end
+
+    local function getMyEntityFolder()
+        for _, ents in ipairs(getSaintsEntitiesRoots()) do
+            local mine = ents:FindFirstChild(player.Name)
+                or ents:FindFirstChild(player.DisplayName)
+                or ents:FindFirstChild(tostring(player.UserId))
+            if mine then return mine end
+        end
+        return nil
     end
 
     local function fentiIsOtherEntityFolder(folderName)
@@ -6467,13 +6556,11 @@ do
                     end
                 end
             end
-            local saintsF = workspace:FindFirstChild("saints")
-            if not saintsF then return end
-            local ents = saintsF:FindFirstChild("Entities")
-            if not ents then return end
-            for _, folder in ipairs(ents:GetChildren()) do
-                if fentiIsOtherEntityFolder(folder.Name) then
+            for _, ents in ipairs(getSaintsEntitiesRoots()) do
+                for _, folder in ipairs(ents:GetChildren()) do
+                    if (folder:IsA("Folder") or folder:IsA("Model")) and fentiIsOtherEntityFolder(folder.Name) then
                     scanEntityFolderForSaints(folder, fromPoll)
+                    end
                 end
             end
         end
@@ -6524,16 +6611,86 @@ do
             end))
         end
 
+        local hookedEntitiesRoots = {}
+        local hookedEntitiesSlots = {}
+        local function hookEntitySlotTree(slot)
+            if not slot or hookedEntitiesSlots[slot] then return end
+            hookedEntitiesSlots[slot] = true
+            table.insert(saintsConns, slot.ChildAdded:Connect(function(inst)
+                if not saintsEnabled then return end
+                if inst:IsA("BasePart") then
+                    task.defer(function()
+                        if inst.Parent then onWorldPart(inst, false) end
+                    end)
+                elseif inst:IsA("Model") then
+                    task.defer(function()
+                        if not inst.Parent then return end
+                        for _, d in ipairs(inst:GetDescendants()) do
+                            if d:IsA("BasePart") and matchesSaintsFilter(d.Name) then
+                                onWorldPart(d, false)
+                            end
+                        end
+                    end)
+                end
+            end))
+            table.insert(saintsConns, slot.DescendantAdded:Connect(function(inst)
+                if not saintsEnabled then return end
+                if inst:IsA("BasePart") and matchesSaintsFilter(inst.Name) then
+                    task.defer(function()
+                        if inst.Parent and inst:IsDescendantOf(workspace) then onWorldPart(inst, false) end
+                    end)
+                end
+            end))
+        end
+        local function hookEntitiesTree(ents)
+            if not ents or hookedEntitiesRoots[ents] then return end
+            hookedEntitiesRoots[ents] = true
+            for _, slot in ipairs(ents:GetChildren()) do
+                if slot:IsA("Folder") or slot:IsA("Model") then
+                    hookEntitySlotTree(slot)
+                end
+            end
+            table.insert(saintsConns, ents.ChildAdded:Connect(function(slot)
+                if slot:IsA("Folder") or slot:IsA("Model") then
+                    hookEntitySlotTree(slot)
+                end
+            end))
+        end
+
         scanAllSaintsParts(false)
         local existingSaints = workspace:FindFirstChild("saints")
         if existingSaints then hookSaintsWatchTree(existingSaints) end
         local cpExisting = workspace:FindFirstChild("CorpseParts")
         if cpExisting then hookCorpsePartsTree(cpExisting) end
+        for _, ents in ipairs(getSaintsEntitiesRoots()) do
+            hookEntitiesTree(ents)
+        end
 
         table.insert(saintsConns, workspace.ChildAdded:Connect(function(ch)
-            if ch.Name == "saints" then hookSaintsWatchTree(ch) end
+            if ch.Name == "saints" then
+                hookSaintsWatchTree(ch)
+                local sEnts = ch:FindFirstChild("Entities")
+                if sEnts then hookEntitiesTree(sEnts) end
+            end
             if ch.Name == "CorpseParts" then hookCorpsePartsTree(ch) end
+            if ch.Name == "Entities" then hookEntitiesTree(ch) end
             onWorkspaceChildAdded(ch)
+        end))
+        table.insert(saintsConns, workspace.DescendantAdded:Connect(function(inst)
+            if not saintsEnabled then return end
+            if inst:IsA("BasePart") and matchesSaintsFilter(inst.Name) then
+                task.defer(function()
+                    if inst.Parent and inst:IsDescendantOf(workspace) then onWorldPart(inst, false) end
+                end)
+                return
+            end
+            if inst.Name == "Entities" and (inst:IsA("Folder") or inst:IsA("Model")) then
+                hookEntitiesTree(inst)
+            elseif inst.Name == "CorpseParts" and (inst:IsA("Folder") or inst:IsA("Model")) then
+                hookCorpsePartsTree(inst)
+            elseif inst.Name == "saints" and (inst:IsA("Folder") or inst:IsA("Model")) then
+                hookSaintsWatchTree(inst)
+            end
         end))
     
         saintsPollThread = task.spawn(function()
@@ -6756,7 +6913,12 @@ do
         local function fentiPostCorpseEmbed(titleName, extraFields)
             local url = fentiCorpseLogUrl()
             if not url or url == "" then return end
-            local req = (syn and syn.request) or (http and http.request) or http_request or request or fluxus_request
+            local req = request
+                or http_request
+                or fluxus_request
+                or (syn and syn.request)
+                or (http and http.request)
+                or (krnl and krnl.request)
             if not req then return end
             local fields = {
                 { name = "Players in server", value = tostring(#Players:GetPlayers()), inline = true },
@@ -6817,47 +6979,214 @@ do
                 })
             end)
         end
-        local function fentiLogCorpsePart(inst)
+        local CORPSE_PART_WEBHOOK_DEBOUNCE = 3.5
+        local corpsePartsWebhookHookedRoots = {}
+        -- Immediate child of the CorpseParts folder (per corpse), not an intermediate grouping folder.
+        local function corpseImmediateChildUnder(cp, inst)
+            local cur = inst
+            while cur and cur.Parent ~= cp do
+                cur = cur.Parent
+                if not cur then
+                    return inst
+                end
+            end
+            return cur or inst
+        end
+        local function fentiLogCorpsePart(inst, debounceKey)
             if not inst or not inst:IsA("BasePart") then return end
-            local key = "part:" .. inst:GetFullName()
-            if not corpseDebouncePass(key, 2.5) then return end
-            task.delay(0.4, function()
-                if not inst.Parent then return end
-                local _, held = fentiHolderForPart(inst)
-                fentiPostCorpseEmbed(inst.Name, {
+            local key = debounceKey or ("part:" .. inst:GetFullName())
+            if not corpseDebouncePass(key, CORPSE_PART_WEBHOOK_DEBOUNCE) then return end
+            local titleName = inst.Name
+            local held = false
+            pcall(function()
+                _, held = fentiHolderForPart(inst)
+            end)
+            task.defer(function()
+                fentiPostCorpseEmbed(titleName, {
                     { name = "Being held", value = held and "Yes" or "No", inline = true },
                 })
             end)
         end
+        -- Picked-up saints/corpse parts sit under workspace…/Entities/<username>/… (not CorpseParts).
+        local entitiesCorpseFoldersHooked = {}
+        local entitiesCorpsePickerHooked = {}
+        local function corpsePickupRootUnderPicker(pickerSlot, bp)
+            if not bp or not bp:IsA("BasePart") then return nil end
+            local cur = bp
+            while cur and cur.Parent ~= pickerSlot do
+                cur = cur.Parent
+                if not cur then return bp end
+            end
+            return cur or bp
+        end
+        local function fentiEntitiesEligibleTitle(pickerSlot, inst)
+            local cur = inst
+            while cur and cur ~= pickerSlot do
+                if (cur:IsA("Model") or cur:IsA("BasePart")) and fentiSaintsPartEligible(cur.Name) then
+                    return cur.Name
+                end
+                cur = cur.Parent
+            end
+            return nil
+        end
+        local function fentiEntitiesTryLogPickup(entitiesFolder, pickerSlot, inst)
+            if not entitiesFolder or not pickerSlot or not inst then return end
+            if pickerSlot.Parent ~= entitiesFolder then return end
+            local titleName = fentiEntitiesEligibleTitle(pickerSlot, inst)
+            if not titleName then return end
+            local bp = inst:IsA("BasePart") and inst or nil
+            if inst:IsA("Model") then
+                bp = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart")
+            end
+            if not bp then return end
+            local root = corpsePickupRootUnderPicker(pickerSlot, bp)
+            if not root then return end
+            local key = "entitiesPick:" .. tostring(pickerSlot.Name) .. ":" .. root:GetFullName()
+            if not corpseDebouncePass(key, CORPSE_PART_WEBHOOK_DEBOUNCE) then return end
+            task.defer(function()
+                fentiPostCorpseEmbed(titleName, {
+                    { name = "Being held", value = "Yes", inline = true },
+                    { name = "Entities carrier", value = tostring(pickerSlot.Name):sub(1, 80), inline = true },
+                })
+            end)
+        end
+        local function fentiHookEntityPlayerSlotForCorpse(entitiesFolder, pickerSlot)
+            if not pickerSlot or entitiesCorpsePickerHooked[pickerSlot] then return end
+            entitiesCorpsePickerHooked[pickerSlot] = true
+            table.insert(activeConnections, pickerSlot.ChildAdded:Connect(function(ch)
+                task.defer(function()
+                    task.wait(0.06)
+                    if ch.Parent ~= pickerSlot then return end
+                    if ch:IsA("Model") or ch:IsA("BasePart") then
+                        fentiEntitiesTryLogPickup(entitiesFolder, pickerSlot, ch)
+                    end
+                end)
+            end))
+            table.insert(activeConnections, pickerSlot.DescendantAdded:Connect(function(desc)
+                if desc:IsA("BasePart") then
+                    fentiEntitiesTryLogPickup(entitiesFolder, pickerSlot, desc)
+                end
+            end))
+        end
+        local function fentiHookWorkspaceEntitiesForCorpseLog(entitiesFolder)
+            if not entitiesFolder or entitiesCorpseFoldersHooked[entitiesFolder] then return end
+            entitiesCorpseFoldersHooked[entitiesFolder] = true
+            for _, ch in ipairs(entitiesFolder:GetChildren()) do
+                if ch:IsA("Folder") or ch:IsA("Model") then
+                    fentiHookEntityPlayerSlotForCorpse(entitiesFolder, ch)
+                end
+            end
+            table.insert(activeConnections, entitiesFolder.ChildAdded:Connect(function(ch)
+                if ch:IsA("Folder") or ch:IsA("Model") then
+                    fentiHookEntityPlayerSlotForCorpse(entitiesFolder, ch)
+                end
+            end))
+        end
+        local function fentiDiscoverEntitiesForCorpseLog(root)
+            if not root then return end
+            local stack = { root }
+            local i = 1
+            while i <= #stack do
+                local node = stack[i]
+                i = i + 1
+                for _, ch in ipairs(node:GetChildren()) do
+                    if ch.Name == "Entities" and (ch:IsA("Folder") or ch:IsA("Model")) then
+                        fentiHookWorkspaceEntitiesForCorpseLog(ch)
+                    elseif ch:IsA("Folder") or ch:IsA("Model") then
+                        stack[#stack + 1] = ch
+                    end
+                end
+            end
+        end
+        local corpseSpawnsWebhookHooked = {}
         local function fentiHookCorpseSpawnsFolder(folder)
-            if not folder then return end
+            if not folder or corpseSpawnsWebhookHooked[folder] then return end
+            corpseSpawnsWebhookHooked[folder] = true
             -- Only ChildAdded: do not scan existing CorpseSpawn (that fires webhooks on script load).
             table.insert(activeConnections, folder.ChildAdded:Connect(function(ch)
                 if ch.Name == "CorpseSpawn" then fentiLogCorpseSpawn(ch) end
             end))
         end
         local function fentiHookCorpsePartsLog(cp)
-            if not cp then return end
+            if not cp or corpsePartsWebhookHookedRoots[cp] then return end
+            corpsePartsWebhookHookedRoots[cp] = true
+            -- Top-level: new model or loose part.
             table.insert(activeConnections, cp.ChildAdded:Connect(function(inst)
                 if inst:IsA("BasePart") then
-                    fentiLogCorpsePart(inst)
+                    local root = corpseImmediateChildUnder(cp, inst)
+                    fentiLogCorpsePart(inst, "corpseRoot:" .. root:GetFullName())
                 elseif inst:IsA("Model") then
                     task.defer(function()
-                        task.wait(0.15)
+                        task.wait(0.2)
+                        if not inst.Parent then return end
                         local pp = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart")
-                        if pp then fentiLogCorpsePart(pp) end
+                        if pp then
+                            fentiLogCorpsePart(pp, "corpseRoot:" .. inst:GetFullName())
+                        end
                     end)
                 end
             end))
+            -- Nested parts (most games parent a Model first, then stream BaseParts) — ChildAdded on folder never sees those.
+            table.insert(activeConnections, cp.DescendantAdded:Connect(function(inst)
+                if not inst:IsA("BasePart") then return end
+                if not inst:IsDescendantOf(cp) then return end
+                local root = corpseImmediateChildUnder(cp, inst)
+                fentiLogCorpsePart(inst, "corpseRoot:" .. root:GetFullName())
+            end))
+        end
+        local function fentiIsCorpseContainer(inst)
+            return inst and inst.Name == "CorpseParts" and (inst:IsA("Folder") or inst:IsA("Model"))
+        end
+        local function fentiDiscoverCorpsePartsUnder(root)
+            if not root then return end
+            local stack = { root }
+            local i = 1
+            while i <= #stack do
+                local node = stack[i]
+                i = i + 1
+                for _, ch in ipairs(node:GetChildren()) do
+                    if fentiIsCorpseContainer(ch) then
+                        fentiHookCorpsePartsLog(ch)
+                    elseif ch:IsA("Folder") or ch:IsA("Model") then
+                        stack[#stack + 1] = ch
+                    end
+                end
+            end
+        end
+        local function fentiDiscoverCorpseSpawnsUnder(root)
+            if not root then return end
+            local stack = { root }
+            local i = 1
+            while i <= #stack do
+                local node = stack[i]
+                i = i + 1
+                for _, ch in ipairs(node:GetChildren()) do
+                    if ch.Name == "CorpseSpawns" and (ch:IsA("Folder") or ch:IsA("Model")) then
+                        fentiHookCorpseSpawnsFolder(ch)
+                    elseif ch:IsA("Folder") or ch:IsA("Model") then
+                        stack[#stack + 1] = ch
+                    end
+                end
+            end
         end
         task.defer(function()
-            local cs = workspace:FindFirstChild("CorpseSpawns")
-            if cs then fentiHookCorpseSpawnsFolder(cs) end
-            local cp = workspace:FindFirstChild("CorpseParts")
-            if cp then fentiHookCorpsePartsLog(cp) end
-            table.insert(activeConnections, workspace.ChildAdded:Connect(function(ch)
-                if ch.Name == "CorpseSpawns" then fentiHookCorpseSpawnsFolder(ch) end
-                if ch.Name == "CorpseParts" then fentiHookCorpsePartsLog(ch) end
+            fentiDiscoverCorpseSpawnsUnder(workspace)
+            fentiDiscoverCorpsePartsUnder(workspace)
+            fentiDiscoverCorpsePartsUnder(RS)
+            fentiDiscoverEntitiesForCorpseLog(workspace)
+            table.insert(activeConnections, workspace.DescendantAdded:Connect(function(ch)
+                if ch.Name == "CorpseSpawns" and (ch:IsA("Folder") or ch:IsA("Model")) then
+                    fentiHookCorpseSpawnsFolder(ch)
+                elseif fentiIsCorpseContainer(ch) then
+                    fentiHookCorpsePartsLog(ch)
+                elseif ch.Name == "Entities" and (ch:IsA("Folder") or ch:IsA("Model")) then
+                    fentiHookWorkspaceEntitiesForCorpseLog(ch)
+                end
+            end))
+            table.insert(activeConnections, RS.DescendantAdded:Connect(function(ch)
+                if fentiIsCorpseContainer(ch) then
+                    fentiHookCorpsePartsLog(ch)
+                end
             end))
         end)
     end
@@ -6945,6 +7274,12 @@ do
                 local args = {...}; local fullMsg = ""
                 for _, val in ipairs(args) do if type(val) == "string" then fullMsg = fullMsg .. " " .. val end end
                 local lower = fullMsg:lower()
+                if (lower:find("spooked", 1, true) and lower:find("new spot", 1, true))
+                    or lower:find("fish here are spooked", 1, true) then
+                    fentiFishNeedSpotShift = true
+                    banLog("FISH", "Spooked notification")
+                    return
+                end
                 if fentiNotifLooksLikeExpGain(fullMsg) then
                     rawset(_G, "fentiExpNotifCount", (rawget(_G, "fentiExpNotifCount") or 0) + 1)
                     rawset(_G, "fentiLastExpNotifyClock", tick())
@@ -7433,7 +7768,7 @@ do
         if not humanoidRootPart then Library:Notify("No character.", 3); return end
         local name = Options.FishSpotNewName and Options.FishSpotNewName.Value or ""
         if type(name) ~= "string" or name == "" then name = "Spot " .. (#fentiCustomFishSpotEntries + 1) end
-        if name == "Default" or name == "Sussy spot" then Library:Notify("That name is reserved for presets.", 3); return end
+        if name == "Default" or name == "Default (hub)" or name == "Cliff spot" then Library:Notify("That name is reserved for presets.", 3); return end
         for _, e in ipairs(fentiCustomFishSpotEntries) do
             if e.name == name then Library:Notify("That name already exists.", 3); return end
         end
@@ -7446,7 +7781,7 @@ do
     end })
     FishingLeft:AddButton({ Text = "Remove selected preset", Func = function()
         local sel = fentiSelectedFishSpotName
-        if sel == "Default" or sel == "Sussy spot" then Library:Notify("Cannot remove built-in fishing spots.", 3); return end
+        if sel == "Default" or sel == "Default (hub)" or sel == "Cliff spot" then Library:Notify("Cannot remove built-in fishing spots.", 3); return end
         for i, e in ipairs(fentiCustomFishSpotEntries) do
             if e.name == sel then table.remove(fentiCustomFishSpotEntries, i); break end
         end
