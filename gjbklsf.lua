@@ -3923,12 +3923,20 @@ do
         end)
     end
 
-    -- Stable path: light property tweaks + real key hold (no HoldDuration=0 spam). Falls back if no VIM.
+    -- Prevent concurrent/restarted holds on the same prompt (resets hold progress for many chests).
+    local fentiPromptHoldBusyUntil = setmetatable({}, { __mode = "k" })
+
+    -- Stable path: light property tweaks + real E hold. Falls back to native InputHold when VIM is unavailable.
     local function fentiFireProximityWithVirtualHold(prompt, opts)
         if not prompt or not prompt:IsA("ProximityPrompt") then return false end
         opts = opts or {}
         local quick = opts.quick == true
-        local holdCap = quick and 0.92 or 2.85
+        local nowClock = os.clock()
+        local busyUntil = fentiPromptHoldBusyUntil[prompt]
+        if busyUntil and nowClock < busyUntil then
+            return false
+        end
+        local holdCap = quick and 1.35 or 3.2
         local oldHold, oldMax, oldEnabled, oldLos
         pcall(function()
             oldHold = prompt.HoldDuration
@@ -3942,8 +3950,15 @@ do
         end)
         local baseHold = 0.5
         pcall(function() baseHold = tonumber(oldHold) or 0 end)
-        local holdSec = math.clamp(baseHold + (quick and 0.12 or 0.22), 0.38, holdCap)
-        local keyCode = fentiGetProximityPromptKeyCode(prompt)
+        local holdSec
+        if opts.profile == "chest" then
+            -- Chests often require longer uninterrupted hold.
+            holdSec = math.clamp(math.max(baseHold + 0.8, 1.35), 1.35, 4.2)
+        else
+            holdSec = math.clamp(baseHold + (quick and 0.22 or 0.35), 0.55, holdCap)
+        end
+        fentiPromptHoldBusyUntil[prompt] = nowClock + holdSec + 0.28
+        local keyCode = Enum.KeyCode.E
         local usedVim = false
         if VIM then
             pcall(function() prompt:InputHoldBegin() end)
@@ -3964,11 +3979,16 @@ do
             end
             pcall(function()
                 prompt:InputHoldBegin()
-                task.wait(math.clamp(baseHold + 0.08, 0.12, quick and 0.55 or 0.95))
+                task.wait(holdSec)
                 prompt:InputHoldEnd()
             end)
         end
-        fentiRestorePromptProps(prompt, oldHold, oldMax, oldEnabled, oldLos, quick and 0.32 or 0.5)
+        fentiRestorePromptProps(prompt, oldHold, oldMax, oldEnabled, oldLos, quick and 0.45 or 0.62)
+        task.delay(holdSec + 0.35, function()
+            if fentiPromptHoldBusyUntil[prompt] and os.clock() >= fentiPromptHoldBusyUntil[prompt] then
+                fentiPromptHoldBusyUntil[prompt] = nil
+            end
+        end)
         return true
     end
 
@@ -4005,10 +4025,13 @@ do
             pcall(function() firesignal(prompt.Triggered, player) end)
             return true
         end
-        local function tryNativeHold(short)
+        local function tryNativeHold()
+            local baseHold = 0.55
+            pcall(function() baseHold = tonumber(oldHold) or 0.55 end)
+            local holdSec = math.clamp(baseHold + 0.25, 0.55, 2.6)
             pcall(function()
                 prompt:InputHoldBegin()
-                task.wait(short and 0.02 or 0.28)
+                task.wait(holdSec)
                 prompt:InputHoldEnd()
             end)
             return true
@@ -4017,106 +4040,21 @@ do
         fentiTryGlobalFireProximityPrompt(prompt)
         if tryTriggeredConns() then ok = true end
         if not ok and tryFireSignal() then ok = true end
-        if not ok then tryNativeHold(_isXeno or not Support.Proximity) end
+        if not ok then tryNativeHold() end
 
         fentiRestorePromptProps(prompt, oldHold, oldMax, oldEnabled, oldLos, 0.5)
         return true
     end
 
-    -- Chest-only true instant: HoldDuration 0 + fireproximityprompt + Triggered (no long VIM bar — that reset halfway).
+    -- Chest path now uses proper hold behavior (E hold), same as other instant pickup flows.
     local function fentiFireChestProximityInstant(prompt)
-        if not prompt or not prompt:IsA("ProximityPrompt") then return false end
-        fentiProximityPromptCheckNotify(prompt)
-        local oldHold = prompt.HoldDuration
-        local oldMax = prompt.MaxActivationDistance
-        local oldEnabled = prompt.Enabled
-        local oldLos = prompt.RequiresLineOfSight
-        pcall(function()
-            prompt.HoldDuration = 0
-            prompt.MaxActivationDistance = math.min(FENTI_PROMPT_MAX_STRETCH, math.max(oldMax > 0.05 and oldMax or 10, 22))
-            prompt.Enabled = true
-            prompt.RequiresLineOfSight = false
-        end)
-        task.wait(0.012)
-        fentiTryGlobalFireProximityPrompt(prompt)
-        if typeof(getconnections) == "function" then
-            pcall(function()
-                for _, conn in pairs(getconnections(prompt.Triggered)) do
-                    if conn.Fire then pcall(function() conn:Fire(player) end) end
-                end
-            end)
-        end
-        if typeof(firesignal) == "function" then
-            pcall(function() firesignal(prompt.Triggered, player) end)
-        end
-        pcall(function()
-            prompt:InputHoldBegin()
-            task.wait(0.028)
-            prompt:InputHoldEnd()
-        end)
-        fentiTryGlobalFireProximityPrompt(prompt)
-        if VIM then
-            pcall(function()
-                local kc = fentiGetProximityPromptKeyCode(prompt)
-                pcall(function() VIM:SendKeyEvent(true, kc, false, false) end)
-                task.wait(0.05)
-                pcall(function() VIM:SendKeyEvent(false, kc, false, false) end)
-            end)
-        end
-        fentiRestorePromptProps(prompt, oldHold, oldMax, oldEnabled, oldLos, 0.26)
-        return true
+        return fentiFireProximityWithVirtualHold(prompt, { quick = false, profile = "chest" }) == true
     end
     _G.fentiFireChestProximityInstant = fentiFireChestProximityInstant
     
-    -- Corpse / loot: longer real hold + burst (game patched short chest-style instant on corpse prompts).
+    -- Corpse / loot: hold-based prompt fire (E hold).
     local function fentiFireCorpseProximityInstant(prompt)
-        if not prompt or not prompt:IsA("ProximityPrompt") then return false end
-        fentiProximityPromptCheckNotify(prompt)
-        local oldHold = prompt.HoldDuration
-        local oldMax = prompt.MaxActivationDistance
-        local oldEnabled = prompt.Enabled
-        local oldLos = prompt.RequiresLineOfSight
-        pcall(function()
-            prompt.HoldDuration = 0
-            prompt.MaxActivationDistance = math.min(FENTI_PROMPT_MAX_STRETCH, math.max(oldMax > 0.05 and oldMax or 10, 34))
-            prompt.Enabled = true
-            prompt.RequiresLineOfSight = false
-        end)
-        task.wait(0.018)
-        fentiTryGlobalFireProximityPrompt(prompt)
-        if typeof(getconnections) == "function" then
-            pcall(function()
-                for _, conn in pairs(getconnections(prompt.Triggered)) do
-                    if conn.Fire then pcall(function() conn:Fire(player) end) end
-                end
-            end)
-        end
-        if typeof(firesignal) == "function" then
-            pcall(function() firesignal(prompt.Triggered, player) end)
-        end
-        pcall(function()
-            prompt:InputHoldBegin()
-            task.wait(0.24)
-            prompt:InputHoldEnd()
-        end)
-        fentiTryGlobalFireProximityPrompt(prompt)
-        if VIM then
-            local kc = fentiGetProximityPromptKeyCode(prompt)
-            local baseH = 0.55
-            pcall(function() baseH = tonumber(oldHold) or 0.55 end)
-            local holdSec = math.clamp(baseH + 0.62, 0.68, 3.5)
-            pcall(function() prompt:InputHoldBegin() end)
-            fentiVimHoldKeyCode(kc, holdSec)
-            pcall(function() prompt:InputHoldEnd() end)
-        end
-        fentiTryGlobalFireProximityPrompt(prompt)
-        pcall(function()
-            prompt:InputHoldBegin()
-            task.wait(0.07)
-            prompt:InputHoldEnd()
-        end)
-        fentiRestorePromptProps(prompt, oldHold, oldMax, oldEnabled, oldLos, 0.58)
-        return true
+        return fentiFireProximityWithVirtualHold(prompt, { quick = false }) == true
     end
     _G.fentiFireCorpseProximityInstant = fentiFireCorpseProximityInstant
     
@@ -4127,7 +4065,7 @@ do
     local FENTI_RADIUS_HORSE = 42
     -- Radius / chest loops: shorter VIM hold so scans stay responsive (full hold via sfp / non-quick).
     local function fentiFireProximityMinimal(prompt)
-        return fentiFireProximityWithVirtualHold(prompt, { quick = true })
+        return fentiFireProximityWithVirtualHold(prompt, { quick = false })
     end
     _G.fentiFireProximityMinimal = fentiFireProximityMinimal
     local function fentiFireProximityFull(prompt)
@@ -4203,13 +4141,13 @@ do
         opts = type(opts) == "table" and opts or {}
         local p = prompt
         task.defer(function()
-            pcall(function() fentiFireProximityWithVirtualHold(p, { quick = true }) end)
+            pcall(function() fentiFireProximityWithVirtualHold(p, { quick = false }) end)
         end)
         if opts.doublePass == true then
             task.delay(0.22, function()
                 pcall(function()
                     if not p or not p.Parent then return end
-                    if VIM then fentiFireProximityWithVirtualHold(p, { quick = true })
+                    if VIM then fentiFireProximityWithVirtualHold(p, { quick = false })
                     else sfp(p) end
                 end)
             end)
@@ -4544,7 +4482,7 @@ do
                             local p = bestPrompt
                             task.spawn(function()
                                 pcall(function()
-                                    fentiFireProximityWithVirtualHold(p, { quick = true })
+                                    fentiFireProximityWithVirtualHold(p, { quick = false })
                                 end)
                             end)
                         end
@@ -5763,9 +5701,21 @@ do
         local castAttempts, castSuccesses = 0, 0
         local lastCastAim = nil
         local noBobberStreak = 0
+        local function fentiSpookedRotationValues()
+            local vals = { "Default (hub)", "Cliff spot" }
+            local out = {}
+            local seen = {}
+            for _, n in ipairs(vals) do
+                if not seen[n] then
+                    seen[n] = true
+                    out[#out + 1] = n
+                end
+            end
+            return out
+        end
         local function fentiNextFishingPresetName()
-            local vals = fentiFishSpotDropdownValues()
-            if #vals <= 1 then return nil end
+            local vals = fentiSpookedRotationValues()
+            if #vals <= 1 then return vals[1] end
             local cur = fentiSelectedFishSpotName
             local idx = 1
             for i, n in ipairs(vals) do
@@ -5781,8 +5731,32 @@ do
             local now = tick()
             if (now - fentiFishLastSpotShiftAt) < 3.5 then return false end
             fentiFishLastSpotShiftAt = now
+            _G.fentiFishSpotMoveSeq = (rawget(_G, "fentiFishSpotMoveSeq") or 0) + 1
+            local moveSeq = _G.fentiFishSpotMoveSeq
+            -- Disable spring hold briefly so it does not yank us back mid-teleport.
+            _G.fentiSuppressFishHold = true
+            local function fentiUnanchorForFishMove()
+                refreshCharacter()
+                local ch = player.Character
+                local root = ch and ch:FindFirstChild("HumanoidRootPart")
+                if root then
+                    pcall(function()
+                        root.Anchored = false
+                        root.AssemblyLinearVelocity = Vector3.zero
+                    end)
+                end
+                local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    pcall(function()
+                        hum.PlatformStand = false
+                        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+                    end)
+                end
+                return root ~= nil
+            end
             refreshCharacter()
             if not humanoidRootPart then return false end
+            fentiUnanchorForFishMove()
             local moved = false
             local pickedPreset = nil
             local nextPreset = fentiNextFishingPresetName()
@@ -5801,28 +5775,33 @@ do
                     smartTeleport(dest)
                     moved = true
                 end
+                fentiUnanchorForFishMove()
+                anchorCF = dest
+                _G.fentiFishingHoldCF = dest
                 rawset(_G, "fentiFishingReturnCFrame", dest)
             else
-                local base = rawget(_G, "fentiFishingReturnCFrame")
-                if typeof(base) ~= "CFrame" then base = humanoidRootPart.CFrame end
-                local ang = math.rad(math.random(0, 359))
-                local dist = math.random(52, 92)
-                local pos = base.Position + Vector3.new(math.cos(ang) * dist, 1.8, math.sin(ang) * dist)
-                local dest = CFrame.lookAt(pos, pos + base.LookVector)
-                moved = _G.fentiSoftTeleportTo and _G.fentiSoftTeleportTo(dest, "fish_spooked_nudge") == true or false
-                if not moved then
-                    smartTeleport(dest)
-                    moved = true
-                end
+                -- No random nudge fallback: keep deterministic preset-only swaps.
+                local dest = fentiGetFishSpotCFrame()
+                moved = _G.fentiSoftTeleportTo and _G.fentiSoftTeleportTo(dest, "fish_spooked_same") == true or false
+                if not moved then smartTeleport(dest); moved = true end
+                fentiUnanchorForFishMove()
+                anchorCF = dest
+                _G.fentiFishingHoldCF = dest
                 rawset(_G, "fentiFishingReturnCFrame", dest)
             end
+            task.delay(0.95, function()
+                if rawget(_G, "fentiFishSpotMoveSeq") ~= moveSeq then return end
+                if isRunning then
+                    _G.fentiSuppressFishHold = false
+                end
+            end)
             if moved then
                 if pickedPreset then
                     banLog("FISH", "Spot changed (spooked -> " .. pickedPreset .. ")")
                     Library:Notify("Fishing: spooked spot -> " .. pickedPreset, 2.5)
                 else
-                    banLog("FISH", "Spot changed (spooked -> nearby)")
-                    Library:Notify("Fishing: spooked spot -> moved nearby", 2.5)
+                    banLog("FISH", "Spot changed (spooked -> preset)")
+                    Library:Notify("Fishing: spooked spot -> preset", 2.5)
                 end
             end
             return moved
@@ -7221,7 +7200,12 @@ do
         if webhookRarityNotify[rarityLabel] == false then return end
         task.spawn(function()
             pcall(function()
-                local req = (syn and syn.request) or (http and http.request) or http_request or request or fluxus_request
+                local req = request
+                    or http_request
+                    or fluxus_request
+                    or (syn and syn.request)
+                    or (http and http.request)
+                    or (krnl and krnl.request)
                 if not req then return end
                 local elapsed = os.time() - Script_Start_Time
                 local sessionStr = string.format("%dh %02dm", math.floor(elapsed / 3600), math.floor((elapsed % 3600) / 60))
@@ -7250,11 +7234,20 @@ do
     end
     
     pcall(function()
+        local fishNotifHooked = setmetatable({}, { __mode = "k" })
         local function fentiNotifLooksLikeExpGain(text)
             local s = string.lower(tostring(text or ""))
             s = string.gsub(s, "^%s+", "")
             s = string.gsub(s, "%s+$", "")
             if s == "" then return false end
+            -- Fish notifications can include EXP text; keep those out of TREE logs.
+            if string.find(s, "fish", 1, true)
+                or string.find(s, "caught", 1, true)
+                or string.find(s, "reeled", 1, true)
+                or string.find(s, "spooked", 1, true)
+                or string.find(s, "chest", 1, true) then
+                return false
+            end
             -- Floating "+ 10 EXP" (same NotificationEvent pipe as fish webhooks).
             if string.match(s, "%+%s*%d+%s*exp") then return true end
             if string.match(s, "^%d+%s*exp%s*$") then return true end
@@ -7262,54 +7255,77 @@ do
             return false
         end
         rawset(_G, "fentiNotifLooksLikeExpGain", fentiNotifLooksLikeExpGain)
-        local notifRemote = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("NotificationEvent")
-        if notifRemote then
-            notifRemote.OnClientEvent:Connect(function(...)
-                local args = {...}; local fullMsg = ""
-                for _, val in ipairs(args) do if type(val) == "string" then fullMsg = fullMsg .. " " .. val end end
-                local lower = fullMsg:lower()
-                if (lower:find("spooked", 1, true) and lower:find("new spot", 1, true))
-                    or lower:find("fish here are spooked", 1, true) then
-                    fentiFishNeedSpotShift = true
-                    banLog("FISH", "Spooked notification")
+        local function fentiHandleFishNotification(...)
+            local args = {...}; local fullMsg = ""
+            for _, val in ipairs(args) do if type(val) == "string" then fullMsg = fullMsg .. " " .. val end end
+            local lower = fullMsg:lower()
+            if (lower:find("spooked", 1, true) and lower:find("new spot", 1, true))
+                or lower:find("fish here are spooked", 1, true) then
+                fentiFishNeedSpotShift = true
+                banLog("FISH", "Spooked notification")
+                return
+            end
+            -- Only "caught" / "reeled" count as catches (not every message containing "fish").
+            if lower:find("caught", 1, true) or lower:find("reeled", 1, true) then
+                local line = fullMsg:gsub("^%s+", ""):gsub("%s+$", "")
+                -- Chest from fishing: spam proximity opens; do not count as fish / webhook.
+                if lower:find("chest", 1, true) then
+                    local nowChest = tick()
+                    if nowChest - lastFentiChestPromptSpam >= 0.8 then
+                        lastFentiChestPromptSpam = nowChest
+                        pcall(function()
+                            if rawget(_G, "AutoCollect") == false then return end
+                            if _G.fentiSpamNearbyChestPrompts then _G.fentiSpamNearbyChestPrompts(64, 26, 0.06) end
+                        end)
+                    end
+                    banLog("FISH", "Chest reel (notification) — " .. line:sub(1, 120))
                     return
                 end
-                if fentiNotifLooksLikeExpGain(fullMsg) then
-                    rawset(_G, "fentiExpNotifCount", (rawget(_G, "fentiExpNotifCount") or 0) + 1)
-                    rawset(_G, "fentiLastExpNotifyClock", tick())
-                    banLog("TREE", "EXP notify (NotificationEvent) — " .. fullMsg:gsub("^%s+", ""):sub(1, 120))
-                    return
+                lastCaughtFish = line:match("[Cc]aught%s+(.+)")
+                    or line:match("[Rr]eeled%s+in%s+(.+)")
+                    or line
+                lastCaughtFish = lastCaughtFish:gsub("^%s+", ""):gsub("%s+$", "")
+                if lastCaughtFish == "" then lastCaughtFish = line end
+                local now = tick()
+                if now - lastFentiCatchNotifAt >= 0.85 then
+                    lastFentiCatchNotifAt = now
+                    fishCaught = fishCaught + 1
+                    if Labels.FishCount then Labels.FishCount:SetText("Fish Caught: " .. fishCaught) end
+                    banLog("FISH", "Catch confirmed (game notification) #" .. fishCaught .. " — " .. line:sub(1, 120))
+                    sendFishWebhook(line)
                 end
-                -- Only "caught" / "reeled" count as catches (not every message containing "fish").
-                if lower:find("caught") or lower:find("reeled") then
-                    local line = fullMsg:gsub("^%s+", ""):gsub("%s+$", "")
-                    -- Chest from fishing: spam proximity opens; do not count as fish / webhook.
-                    if lower:find("chest", 1, true) then
-                        local nowChest = tick()
-                        if nowChest - lastFentiChestPromptSpam >= 0.8 then
-                            lastFentiChestPromptSpam = nowChest
-                            pcall(function()
-                                if rawget(_G, "AutoCollect") == false then return end
-                                if _G.fentiSpamNearbyChestPrompts then _G.fentiSpamNearbyChestPrompts(64, 26, 0.06) end
-                            end)
-                        end
-                        banLog("FISH", "Chest reel (notification) — " .. line:sub(1, 120))
-                        return
-                    end
-                    lastCaughtFish = line:match("[Cc]aught%s+(.+)") or line:match("[Rr]eeled%s+in%s+(.+)") or line
-                    lastCaughtFish = lastCaughtFish:gsub("^%s+", ""):gsub("%s+$", "")
-                    if lastCaughtFish == "" then lastCaughtFish = line end
-                    local now = tick()
-                    if now - lastFentiCatchNotifAt >= 0.85 then
-                        lastFentiCatchNotifAt = now
-                        fishCaught = fishCaught + 1
-                        if Labels.FishCount then Labels.FishCount:SetText("Fish Caught: " .. fishCaught) end
-                        banLog("FISH", "Catch confirmed (game notification) #" .. fishCaught .. " — " .. line:sub(1, 120))
-                        sendFishWebhook(line)
-                    end
-                end
-            end)
+                return
+            end
+            if fentiNotifLooksLikeExpGain(fullMsg) then
+                rawset(_G, "fentiExpNotifCount", (rawget(_G, "fentiExpNotifCount") or 0) + 1)
+                rawset(_G, "fentiLastExpNotifyClock", tick())
+                banLog("TREE", "EXP notify (NotificationEvent) — " .. fullMsg:gsub("^%s+", ""):sub(1, 120))
+                return
+            end
         end
+        local function fentiHookFishNotifRemote(rem)
+            if not rem or fishNotifHooked[rem] then return end
+            if not (rem:IsA("RemoteEvent") or rem:IsA("UnreliableRemoteEvent")) then return end
+            fishNotifHooked[rem] = true
+            rem.OnClientEvent:Connect(fentiHandleFishNotification)
+        end
+        local function fentiDiscoverFishNotifRemotes()
+            local remotes = RS:FindFirstChild("Remotes")
+            if remotes then
+                local direct = remotes:FindFirstChild("NotificationEvent")
+                if direct then fentiHookFishNotifRemote(direct) end
+            end
+            local any = RS:FindFirstChild("NotificationEvent", true)
+            if any then fentiHookFishNotifRemote(any) end
+        end
+        fentiDiscoverFishNotifRemotes()
+        task.delay(1.5, fentiDiscoverFishNotifRemotes)
+        task.delay(4, fentiDiscoverFishNotifRemotes)
+        RS.DescendantAdded:Connect(function(inst)
+            if inst.Name == "NotificationEvent" then
+                fentiHookFishNotifRemote(inst)
+            end
+        end)
     end)
     
     -- ----------------------------------------------------------------------------
