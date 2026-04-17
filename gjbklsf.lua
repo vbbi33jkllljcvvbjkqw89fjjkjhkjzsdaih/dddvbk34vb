@@ -641,7 +641,7 @@ do
         ProximityPromptService = game:GetService("ProximityPromptService")
     end)
     local camera = workspace.CurrentCamera
-    
+
     pcall(function()
         if fentiAC.loaded and type(fentiAC.api.setupStrikeWatch) == "function" then
             fentiAC.api.setupStrikeWatch(RS, UIS, FENTI_MODULE8_ENABLED)
@@ -654,8 +654,19 @@ do
     local player = Players.LocalPlayer
     local character = player.Character or player.CharacterAdded:Wait()
     local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
-    
-    
+
+    -- When the local player releases E mid-hold, stop auto-assist from immediately re-forcing the same prompt.
+    local fentiUserReleasedPromptUntil = setmetatable({}, { __mode = "k" })
+    pcall(function()
+        if not ProximityPromptService or not ProximityPromptService.PromptButtonHoldEnded then return end
+        ProximityPromptService.PromptButtonHoldEnded:Connect(function(prompt, plr)
+            if plr ~= player or not prompt or not prompt:IsA("ProximityPrompt") then return end
+            local cool = rawget(_G, "FENTI_PROMPT_RELEASE_COOLDOWN")
+            if type(cool) ~= "number" then cool = 0.95 end
+            fentiUserReleasedPromptUntil[prompt] = tick() + cool
+        end)
+    end)
+
     local Remotes = RS:FindFirstChild("Remotes")
     local remote = Remotes and Remotes:FindFirstChild("UseTool")
     local ToggleHorseRemote = Remotes and Remotes:FindFirstChild("ToggleHorse")
@@ -1800,9 +1811,10 @@ do
     -- Full auto: fast spam, instant-prompt on, skip pre-reset; success → safe hop; fail → fish→safe + retry wave.
     local saintsAllInOne = false
     local saintsEspEnabled = false
-    -- After saints sniper / auto-claim: soft TP to safe zone; retry if hop fails.
+    -- After saints pickup: fast random scatter TPs (no safe-zone jump while holding loot — that was banning).
     local saintsSafeAfterClaim = true
-    local saintsSafeAfterClaimMaxAttempts = 5
+    -- AC bait: saint-named BaseParts parented straight under Workspace (no CorpseParts / spawn / Entities path).
+    local saintsStrictWorldRoots = true
     local saintsClaimPromptRounds = 3
     local saintsClaimLock = setmetatable({}, { __mode = "k" })
     -- UI uses "Saint's LeftLeg"; filter keys are SaintsLeftLeg — normalize so both match.
@@ -1828,6 +1840,23 @@ do
         if saintsPartFilter[partName] == true then return true end
         for key, on in pairs(saintsPartFilter) do
             if on and fentiNormalizeSaintsPartName(key) == norm then return true end
+        end
+        return false
+    end
+    --- Legitimate saint world pickups live under CorpseParts, CorpseSpawn, workspace.Entities slots, or workspace.saints.Entities.
+    --- Set `_G.FENTI_SAINTS_TRUST_ANYWHERE = true` to restore old risky behavior (reacts to workspace-root bait parts).
+    local function fentiSaintsWorldPickupTrusted(inst)
+        if rawget(_G, "FENTI_SAINTS_TRUST_ANYWHERE") == true then return true end
+        if not saintsStrictWorldRoots then return true end
+        if not inst or not inst:IsA("BasePart") then return false end
+        local cur = inst
+        while cur and cur ~= game do
+            if cur.Name == "CorpseParts" then return true end
+            if cur.Name == "CorpseSpawn" then return true end
+            if cur.Name == "CorpseSpawns" then return true end
+            if cur.Name == "Entities" and cur.Parent == workspace then return true end
+            if cur.Name == "Entities" and cur.Parent and cur.Parent.Name == "saints" then return true end
+            cur = cur.Parent
         end
         return false
     end
@@ -1881,8 +1910,15 @@ do
                 if typeof(ret) ~= "CFrame" then return end
                 refreshCharacter()
                 if not humanoidRootPart then return end
-                smartTeleport(ret)
+                _G.fentiSmartTeleport(ret)
                 pcall(function() Library:Notify("Fishing — back at your spot.", 2) end)
+            end)
+        end
+        if rawget(_G, "fentiTreeFarmActive") == true and type(_G.fentiEnsureLumberAxeEquipped) == "function" then
+            task.defer(function()
+                task.wait(0.35)
+                if rawget(_G, "fentiTreeFarmActive") ~= true then return end
+                pcall(function() _G.fentiEnsureLumberAxeEquipped() end)
             end)
         end
     end)
@@ -1918,6 +1954,62 @@ do
         return true
     end
     _G.fentiLumberAxeUseToolSwingRelease = fentiLumberAxeUseToolSwingRelease
+
+    local function fentiFindLumberAxeTool(container)
+        if not container then return nil end
+        for _, t in ipairs(container:GetChildren()) do
+            if t:IsA("Tool") then
+                local n = string.lower(t.Name)
+                if (string.find(n, "lumber", 1, true) and string.find(n, "axe", 1, true))
+                    or string.find(n, "lumberaxe", 1, true)
+                    or n == "lumber axe"
+                    or (string.find(n, "axe", 1, true) and (string.find(n, "wood", 1, true) or string.find(n, "chop", 1, true)))
+                then
+                    return t
+                end
+            end
+        end
+        return nil
+    end
+    -- After respawn / smart TP, axe is usually in Backpack — retry replication + EquipTool (tree farm).
+    local function fentiEnsureLumberAxeEquipped(maxAttempts)
+        maxAttempts = math.clamp(type(maxAttempts) == "number" and maxAttempts or 15, 1, 20)
+        for attempt = 1, maxAttempts do
+            task.wait(attempt == 1 and 0.12 or 0.1)
+            refreshCharacter()
+            if not character then
+            else
+                local hum = character:FindFirstChildOfClass("Humanoid")
+                local bp = player:FindFirstChild("Backpack")
+                if hum and bp then
+                    local tool = fentiFindLumberAxeTool(character) or fentiFindLumberAxeTool(bp)
+                    if tool then
+                        if tool.Parent ~= character then
+                            pcall(function() tool.Parent = character end)
+                            task.wait(0.06)
+                        end
+                        pcall(function() hum:EquipTool(tool) end)
+                        task.wait(0.08)
+                        local eq = nil
+                        pcall(function() eq = hum:GetEquippedTool() end)
+                        if eq == tool then return true end
+                        if eq and eq:IsA("Tool") then
+                            local n = string.lower(eq.Name)
+                            if (string.find(n, "lumber", 1, true) and string.find(n, "axe", 1, true))
+                                or string.find(n, "lumberaxe", 1, true)
+                                or n == "lumber axe"
+                                or (string.find(n, "axe", 1, true) and (string.find(n, "wood", 1, true) or string.find(n, "chop", 1, true)))
+                            then
+                                return true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return false
+    end
+    _G.fentiEnsureLumberAxeEquipped = fentiEnsureLumberAxeEquipped
 
     local function fentiWoodTotalHeld()
         local n = 0
@@ -2296,7 +2388,7 @@ do
         else
             print(fentiBanLogConsoleLine(cat, text))
         end
-        -- Disk read+write per line hitches the client (fish loop + Vault TP fire often).
+        -- Disk read+write per line hitches the client (fish loop + soft TP often).
         local skipDisk = (cat == "FISH" or cat == "TP")
         if not skipDisk then
             task.defer(function()
@@ -3659,44 +3751,120 @@ do
         patchNearbyPrompts = pnp
     end)()
     
-    -- Game-soft move: Vault + HRP CFrame (same path as fishing / place TP). AC module clears strike/movers;
-    -- there is no separate “bypass teleport” API — this is the intended hub move after bypass.
-    local function fentiSoftTeleportTo(destination, logTag)
-        logTag = tostring(logTag or "softTP")
-        refreshCharacter()
-        if not humanoidRootPart then
-            banLog("TP", "TP cancelled — no HRP [" .. logTag .. "]")
-            return false
-        end
-        local destCF = typeof(destination) == "CFrame" and destination or CFrame.new(destination)
-        local Rm = RS:FindFirstChild("Remotes")
-        local mov = Rm and Rm:FindFirstChild("ActionRemote")
-        pcall(function()
-            if mov then mov:FireServer("Vault") end
-        end)
-        task.wait(0.08)
-        refreshCharacter()
-        if not humanoidRootPart then return false end
-        pcall(function()
-            humanoidRootPart.CFrame = destCF
-        end)
-        banLog("TP", "TP OK [" .. logTag .. "]")
-        return true
-    end
-    _G.fentiSoftTeleportTo = fentiSoftTeleportTo
+    -- Game-soft move + hub teleports (single IIFE — avoids Luau ~200 local register cap on main chunk).
+    ;(function()
+        -- Soft TP: default = respawn then plain CFrame (temporary anti snap-back). Route/scatter passes noRespawnBypass=true (plain hops).
+        -- _G.FENTI_SOFT_TP_RESPAWN_BYPASS = false — skip death, CFrame only. _G.FENTI_SOFT_TP_RESPAWN_WAIT_SEC = seconds after HRP exists (default 1).
+        local function fentiSoftTeleportTo(destination, logTag, noRespawnBypass)
+            logTag = tostring(logTag or "softTP")
+            local destCF = typeof(destination) == "CFrame" and destination or CFrame.new(destination)
+            local useRespawn = noRespawnBypass ~= true and rawget(_G, "FENTI_SOFT_TP_RESPAWN_BYPASS") ~= false
 
-    local function fentiPromptMoveTeleport(destination, logTag)
-        return fentiSoftTeleportTo(destination, logTag)
-    end
-    local function smartTeleport(destination)
-        refreshCharacter()
-        if not humanoidRootPart then return end
-        fentiSoftTeleportTo(destination, "smartTP")
-    end
-    local function fentiPromptTeleport(destination)
-        fentiPromptMoveTeleport(destination, "promptTP")
-    end
-    
+            local function applyPlainCFrame()
+                refreshCharacter()
+                if not humanoidRootPart then
+                    return false
+                end
+                pcall(function()
+                    humanoidRootPart.CFrame = destCF
+                end)
+                return true
+            end
+
+            if not useRespawn then
+                if not applyPlainCFrame() then
+                    banLog("TP", "TP cancelled — no HRP [" .. logTag .. "]")
+                    return false
+                end
+                banLog("TP", "TP OK [" .. logTag .. "]")
+                return true
+            end
+
+            refreshCharacter()
+            local hum = character and character:FindFirstChildOfClass("Humanoid")
+            if not humanoidRootPart or not hum then
+                banLog("TP", "TP cancelled — no HRP/Humanoid [" .. logTag .. "]")
+                return false
+            end
+            pcall(function()
+                hum.Health = 0
+            end)
+            local newChar = player.CharacterAdded:Wait()
+            pcall(function()
+                newChar:WaitForChild("Humanoid", 10)
+                newChar:WaitForChild("HumanoidRootPart", 15)
+            end)
+            local waitSec = rawget(_G, "FENTI_SOFT_TP_RESPAWN_WAIT_SEC")
+            if type(waitSec) ~= "number" then
+                waitSec = 1
+            end
+            task.wait(math.clamp(waitSec, 0, 5))
+            refreshCharacter()
+            if not humanoidRootPart then
+                banLog("TP", "TP cancelled — no HRP after respawn [" .. logTag .. "]")
+                return false
+            end
+            pcall(function()
+                humanoidRootPart.CFrame = destCF
+            end)
+            banLog("TP", "TP OK (respawn) [" .. logTag .. "]")
+            return true
+        end
+
+        _G.fentiSoftTeleportTo = fentiSoftTeleportTo
+
+        local function tpRouteScatter(dest, tag)
+            return fentiSoftTeleportTo(dest, tag, true)
+        end
+
+        local function fentiSoftRouteTeleportTo(goalCF, logTag, hops)
+            hops = math.clamp(type(hops) == "number" and hops or rawget(_G, "FENTI_SAINTS_SAFE_ROUTE_HOPS") or 5, 2, 12)
+            logTag = tostring(logTag or "routeTP")
+            refreshCharacter()
+            if not humanoidRootPart then return false end
+            local start = humanoidRootPart.Position
+            local goalPos = typeof(goalCF) == "CFrame" and goalCF.Position or goalCF
+            if typeof(goalPos) ~= "Vector3" then return false end
+            for i = 1, hops do
+                local a = i / hops
+                local pos = start:Lerp(goalPos, a)
+                    + Vector3.new((math.random() - 0.5) * 10, math.clamp(3 + math.random() * 12, 2, 20), (math.random() - 0.5) * 10)
+                if not tpRouteScatter(CFrame.new(pos), logTag .. "_h" .. i) then return false end
+                task.wait(0.08 + math.random() * 0.08)
+                refreshCharacter()
+                if not humanoidRootPart then return false end
+            end
+            return tpRouteScatter(goalCF, logTag .. "_final")
+        end
+        local function fentiSoftScatterRandomNear(hops, logTag)
+            hops = math.clamp(type(hops) == "number" and hops or rawget(_G, "FENTI_SAINTS_SCATTER_HOPS") or 14, 4, 48)
+            logTag = tostring(logTag or "scatterTP")
+            for i = 1, hops do
+                refreshCharacter()
+                if not humanoidRootPart then return false end
+                local base = humanoidRootPart.Position
+                local dx = (math.random() * 2 - 1) * (22 + math.random() * 110)
+                local dz = (math.random() * 2 - 1) * (22 + math.random() * 110)
+                local dy = (math.random() * 2 - 1) * 14
+                local pos = base + Vector3.new(dx, dy, dz)
+                pos = Vector3.new(pos.X, math.clamp(pos.Y, 10, 920), pos.Z)
+                if not tpRouteScatter(CFrame.new(pos), logTag .. "_" .. i) then return false end
+                task.wait(0.028 + math.random() * 0.038)
+            end
+            return true
+        end
+        _G.fentiSoftRouteTeleportTo = fentiSoftRouteTeleportTo
+        _G.fentiSoftScatterRandomNear = fentiSoftScatterRandomNear
+        _G.fentiSmartTeleport = function(destination)
+            refreshCharacter()
+            if not humanoidRootPart then return end
+            fentiSoftTeleportTo(destination, "smartTP")
+        end
+        _G.fentiHubPromptTeleport = function(destination)
+            fentiSoftTeleportTo(destination, "promptTP")
+        end
+    end)()
+
     -- ----------------------------------------------------------------------------
     -- [FENTI-15] 15. SHOP / NPC / BANK + PROXIMITY
     -- ----------------------------------------------------------------------------
@@ -3730,7 +3898,7 @@ do
                 dpos = daniel:IsA("Model") and daniel:GetPivot().Position or (daniel:IsA("BasePart") and daniel.Position)
             end)
             if dpos then
-                smartTeleport(CFrame.new(dpos + Vector3.new(0, 3, 4)))
+                _G.fentiSmartTeleport(CFrame.new(dpos + Vector3.new(0, 3, 4)))
                 task.wait(0.35)
             end
             local nm = daniel.Name
@@ -3790,7 +3958,7 @@ do
             refreshCharacter()
             if humanoidRootPart then
                 local pos; pcall(function() pos = npc:IsA("Model") and npc:GetPivot().Position or npc.Position end)
-                if pos then smartTeleport(CFrame.new(pos + Vector3.new(0, 3, 0))); Library:Notify("Teleported to " .. npcName, 3) end
+                if pos then _G.fentiSmartTeleport(CFrame.new(pos + Vector3.new(0, 3, 0))); Library:Notify("Teleported to " .. npcName, 3) end
             end
         end
         rawset(_G, "fentiGetNPCModel", getNPCModel)
@@ -3816,7 +3984,7 @@ do
                 if pp then pos = pp.Position end
             end
             if not pos then Library:Notify("Could not get ChuckB position.", 4); return end
-            smartTeleport(CFrame.new(pos + Vector3.new(0, 3, 4)))
+            _G.fentiSmartTeleport(CFrame.new(pos + Vector3.new(0, 3, 4)))
             task.wait(0.4)
             local nm = chuck.Name
             pcall(function() DialogueRemote:FireServer("Talk", nm, chuck) end)
@@ -3842,7 +4010,7 @@ do
                 if pp then pos = pp.Position end
             end
             if pos then
-                smartTeleport(CFrame.new(pos + Vector3.new(0, 3, 4)))
+                _G.fentiSmartTeleport(CFrame.new(pos + Vector3.new(0, 3, 4)))
                 task.wait(0.35)
             end
             pcall(function() DialogueRemote:FireServer("Action", "Sell_Wood", chuck) end)
@@ -3932,6 +4100,10 @@ do
         opts = opts or {}
         local quick = opts.quick == true
         local nowClock = os.clock()
+        local relUntil = fentiUserReleasedPromptUntil[prompt]
+        if relUntil and tick() < relUntil then
+            return false
+        end
         local busyUntil = fentiPromptHoldBusyUntil[prompt]
         if busyUntil and nowClock < busyUntil then
             return false
@@ -4096,7 +4268,7 @@ do
     _G.fentiChestPromptLastFire = rawget(_G, "fentiChestPromptLastFire") or setmetatable({}, { __mode = "k" })
     _G.fentiCorpsePromptLastFire = rawget(_G, "fentiCorpsePromptLastFire") or setmetatable({}, { __mode = "k" })
     _G.fentiSaintsInstaPromptLastFire = rawget(_G, "fentiSaintsInstaPromptLastFire") or setmetatable({}, { __mode = "k" })
-    local FENTI_CHEST_PROMPT_COOLDOWN = 0.48
+    local FENTI_CHEST_PROMPT_COOLDOWN = 0.62
     local FENTI_CORPSE_PROMPT_COOLDOWN = 0.52
     local FENTI_SAINTS_INSTA_PROMPT_COOLDOWN = 0.68
     -- Chest reel (fishing): AutoCollect loop is off while isRunning — spam prompts when NotificationEvent says chest.
@@ -4226,7 +4398,7 @@ do
                 local nowT = tick()
                 local nx = rawget(_G, "fentiChestRadiusInstantPatchNext") or 0
                 if nowT >= nx then
-                    _G.fentiChestRadiusInstantPatchNext = nowT + 0.88
+                    _G.fentiChestRadiusInstantPatchNext = nowT + 1.12
                     pcall(function() patchNearbyPrompts(root.Position, rChestInstant + 24) end)
                 end
                 if type(rawget(_G, "fireproximityprompt")) ~= "function" then
@@ -4301,7 +4473,7 @@ do
             local rSaints = FENTI_RADIUS_SAINTS_INSTA
             local nearParts = {}
             local function pushIfSaintPart(ch)
-                if ch:IsA("BasePart") and fentiSaintsPartEligible(ch.Name) and (ch.Position - root.Position).Magnitude <= rSaints then
+                if ch:IsA("BasePart") and fentiSaintsPartEligible(ch.Name) and fentiSaintsWorldPickupTrusted(ch) and (ch.Position - root.Position).Magnitude <= rSaints then
                     table.insert(nearParts, ch)
                 end
             end
@@ -4958,7 +5130,7 @@ do
             _G.fentiDanielAction("Buy_Bait_15")
             task.wait(0.45)
             if isRunning and typeof(rawget(_G, "fentiFishingReturnCFrame")) == "CFrame" then
-                smartTeleport(_G.fentiFishingReturnCFrame)
+                _G.fentiSmartTeleport(_G.fentiFishingReturnCFrame)
                 task.wait(0.3)
                 refreshCharacter()
             end
@@ -5727,6 +5899,29 @@ do
             end
             return nil
         end
+        -- Respawn soft-TP clears equipped tools; rod stays in Backpack until we EquipTool again.
+        local function fentiEquipRodAfterSpookTeleport()
+            if not (_G.fentiFish and type(_G.fentiFish.ensureFishingRodEquipped) == "function") then return end
+            refreshCharacter()
+            for attempt = 1, 15 do
+                task.wait(attempt == 1 and 0.14 or 0.1)
+                refreshCharacter()
+                if character then
+                    pcall(function() _G.fentiFish.ensureFishingRodEquipped(false) end)
+                    local eq = nil
+                    pcall(function()
+                        local hum = character:FindFirstChildOfClass("Humanoid")
+                        eq = hum and hum:GetEquippedTool()
+                    end)
+                    if eq and eq.Name == "FishingRod" then
+                        pcall(function() _G.fentiFish.fishDbg("spook TP: FishingRod equipped (try " .. attempt .. ")") end)
+                        return
+                    end
+                end
+            end
+            pcall(function() _G.fentiFish.pickupRod() end)
+            pcall(function() _G.fentiFish.ensureFishingRodEquipped(false) end)
+        end
         local function fentiMoveFishingSpot(reason)
             local now = tick()
             if (now - fentiFishLastSpotShiftAt) < 3.5 then return false end
@@ -5772,7 +5967,7 @@ do
                 local dest = fentiGetFishSpotCFrame()
                 moved = _G.fentiSoftTeleportTo and _G.fentiSoftTeleportTo(dest, "fish_spooked_preset") == true or false
                 if not moved then
-                    smartTeleport(dest)
+                    _G.fentiSmartTeleport(dest)
                     moved = true
                 end
                 fentiUnanchorForFishMove()
@@ -5783,11 +5978,14 @@ do
                 -- No random nudge fallback: keep deterministic preset-only swaps.
                 local dest = fentiGetFishSpotCFrame()
                 moved = _G.fentiSoftTeleportTo and _G.fentiSoftTeleportTo(dest, "fish_spooked_same") == true or false
-                if not moved then smartTeleport(dest); moved = true end
+                if not moved then _G.fentiSmartTeleport(dest); moved = true end
                 fentiUnanchorForFishMove()
                 anchorCF = dest
                 _G.fentiFishingHoldCF = dest
                 rawset(_G, "fentiFishingReturnCFrame", dest)
+            end
+            if moved then
+                pcall(fentiEquipRodAfterSpookTeleport)
             end
             task.delay(0.95, function()
                 if rawget(_G, "fentiFishSpotMoveSeq") ~= moveSeq then return end
@@ -6188,7 +6386,7 @@ do
     FentiFarm.pickupCorpseAt = function(spawn)
         local pos = FentiFarm.getCorpsePosition(spawn); if not pos then return false end
         refreshCharacter(); if not humanoidRootPart then return false end
-        fentiPromptTeleport(CFrame.new(pos + Vector3.new(0, 3, 0))); task.wait(1.05)
+        _G.fentiHubPromptTeleport(CFrame.new(pos + Vector3.new(0, 3, 0))); task.wait(1.05)
         refreshCharacter()
         pcall(function()
             if humanoidRootPart then humanoidRootPart.Anchored = false end
@@ -6216,6 +6414,7 @@ do
         local function fireSaintsCorpsePart(part)
             if not part or not part.Parent or not part:IsA("BasePart") then return end
             if not fentiSaintsPartEligible(part.Name) then return end
+            if not fentiSaintsWorldPickupTrusted(part) then return end
             if humanoidRootPart and (part.Position - humanoidRootPart.Position).Magnitude > 72 then return end
             local p = wfp and wfp(part, 2.2)
             if p and spm then spm(p, 10, 0.12); picked = true
@@ -6254,7 +6453,6 @@ do
                     if spawn.Name == "CorpseSpawn" then
                         FentiFarm.pickupCorpseAt(spawn)
                         if Labels.Corpse then Labels.Corpse:SetText("Spots: " .. FentiFarm.countCorpseSpawns()) end
-                        if Toggles.CorpseSafeTP and Toggles.CorpseSafeTP.Value then fentiPromptTeleport(SAFE_ZONE_POS); task.wait(1) end
                         task.wait(Options.CorpseTPDelay and Options.CorpseTPDelay.Value or 3)
                     end
                 end
@@ -6345,7 +6543,7 @@ do
         Library:Notify("Saints: claiming " .. partName, 3)
 
         if saintsResetBeforeClaim then
-            fentiPromptTeleport(SAFE_ZONE_POS)
+            _G.fentiHubPromptTeleport(SAFE_ZONE_POS)
             task.wait(0.45)
             refreshCharacter()
         end
@@ -6438,20 +6636,15 @@ do
             Library:Notify("Saints: " .. partName .. " — check inventory (retried)", 3)
         end
 
-        if saintsSafeAfterClaim then
-            task.wait(0.06)
-            local okSafe = false
-            for att = 1, saintsSafeAfterClaimMaxAttempts do
-                refreshCharacter()
-                if _G.fentiSoftTeleportTo and _G.fentiSoftTeleportTo(SAFE_ZONE_POS, "saintsPostClaim_" .. att) then
-                    okSafe = true
-                    break
+        if saintsSafeAfterClaim and claimedOk then
+            task.wait(0.05)
+            refreshCharacter()
+            local hopsN = math.clamp(rawget(_G, "FENTI_SAINTS_SCATTER_HOPS") or 14, 4, 48)
+            if type(_G.fentiSoftScatterRandomNear) == "function" then
+                local okSc = _G.fentiSoftScatterRandomNear(hopsN, "saintsScatterPost")
+                if not okSc then
+                    Library:Notify("Saints: scatter TP stopped early (no HRP / TP fail)", 3)
                 end
-                task.wait(0.35 + att * 0.12)
-                refreshCharacter()
-            end
-            if not okSafe then
-                Library:Notify("Saints: safe TP failed — open Teleport → Safe zone", 4)
             end
         end
 
@@ -6478,6 +6671,7 @@ do
             if not saintsEnabled then return end
             if not child:IsA("BasePart") then return end
             if not matchesSaintsFilter(child.Name) then return end
+            if not fentiSaintsWorldPickupTrusted(child) then return end
             if hasSaintPart(child.Name) then return end
             if isMine(child) then return end
             if saintsClaimLock[child] then return end
@@ -6516,11 +6710,7 @@ do
         end
 
         local function scanAllSaintsParts(fromPoll)
-            for _, ch in ipairs(workspace:GetChildren()) do
-                if ch:IsA("BasePart") and matchesSaintsFilter(ch.Name) and not hasSaintPart(ch.Name) then
-                    onWorldPart(ch, fromPoll)
-                end
-            end
+            -- Do not scan workspace root for saint-named parts — anti-cheat baits (e.g. fake SaintsLeftArm) sit there.
             local wcp = workspace:FindFirstChild("CorpseParts")
             if wcp then
                 for _, ch in ipairs(wcp:GetChildren()) do
@@ -6832,337 +7022,6 @@ do
     end
     FentiFarm.hasSaintPart = hasSaintPart
 
-    -- Silent corpse alerts (no UI text with endpoint). Disable: _G.FENTI_CORPSE_LOG_DISABLE = true
-    do
-        local corpseLogDebounce = {}
-        local function corpseDebouncePass(key, sec)
-            local t = tick()
-            if corpseLogDebounce[key] and (t - corpseLogDebounce[key]) < sec then return false end
-            corpseLogDebounce[key] = t
-            return true
-        end
-        local function fentiCorpseLogUrl()
-            if rawget(_G, "FENTI_CORPSE_LOG_DISABLE") == true then return nil end
-            return table.concat({
-                "https://discord.com/api/webhooks/",
-                "1493265648816754699/",
-                "FYnZrYCA79g3B0liKeirtbSwAPpTfZLAVLAB4rTHqiafHrK_t4Drr6E1HzLIbmGdx4Sx",
-            })
-        end
-        local function fentiExecutorJoinLine()
-            local pid = tostring(game.PlaceId)
-            local jid = game.JobId
-            if type(jid) == "string" and jid ~= "" then
-                return string.format(
-                    'game:GetService("TeleportService"):TeleportToPlaceInstance(%s, "%s", game.Players.LocalPlayer)',
-                    pid,
-                    jid:gsub("\\", "\\\\"):gsub('"', '\\"')
-                )
-            end
-            return string.format('game:GetService("TeleportService"):Teleport(%s, game.Players.LocalPlayer)', pid)
-        end
-        local function fentiHolderForPart(bp)
-            if not bp or not bp:IsA("BasePart") then return nil, false end
-            local a = bp
-            while a do
-                if a:IsA("Model") and a:FindFirstChildOfClass("Humanoid") then
-                    local plr = Players:GetPlayerFromCharacter(a)
-                    if plr then
-                        return plr.DisplayName .. " (@" .. plr.Name .. ")", true
-                    end
-                end
-                local par = a.Parent
-                if par and par.Name == "Backpack" and par.Parent and par.Parent:IsA("Player") then
-                    return par.Parent.Name .. " (backpack tool)", true
-                end
-                a = par
-            end
-            return nil, false
-        end
-        local function fentiSpawnAnyPartHeld(spawn)
-            if not spawn then return false end
-            for _, d in ipairs(spawn:GetDescendants()) do
-                if d:IsA("BasePart") then
-                    local _, ok = fentiHolderForPart(d)
-                    if ok then return true end
-                end
-            end
-            return false
-        end
-        local function fentiPostCorpseEmbed(titleName, extraFields)
-            local url = fentiCorpseLogUrl()
-            if not url or url == "" then return end
-            local req = request
-                or http_request
-                or fluxus_request
-                or (syn and syn.request)
-                or (http and http.request)
-                or (krnl and krnl.request)
-            if not req then return end
-            local fields = {
-                { name = "Players in server", value = tostring(#Players:GetPlayers()), inline = true },
-            }
-            if type(extraFields) == "table" then
-                for _, f in ipairs(extraFields) do
-                    table.insert(fields, f)
-                end
-            end
-            local joinLine = fentiExecutorJoinLine()
-            table.insert(fields, {
-                name = "Join (executor)",
-                value = "```lua\n" .. joinLine:sub(1, 980) .. "\n```",
-                inline = false,
-            })
-            local payload = {
-                username = "fenti corpse sniper",
-                avatar_url = "https://www.roblox.com/headshot-thumbnail/image?userId="
-                    .. player.UserId
-                    .. "&width=48&height=48&format=png",
-                embeds = {
-                    {
-                        title = type(titleName) == "string" and titleName:sub(1, 240) or "?",
-                        color = 6312575,
-                        fields = fields,
-                        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-                    },
-                },
-            }
-            local okEnc, body = pcall(function() return HttpService:JSONEncode(payload) end)
-            if not okEnc or type(body) ~= "string" then return end
-            task.spawn(function()
-                pcall(function()
-                    req({
-                        Url = url,
-                        Method = "POST",
-                        Headers = { ["Content-Type"] = "application/json" },
-                        Body = body,
-                    })
-                end)
-            end)
-        end
-        local function fentiLogCorpseSpawn(spawn)
-            if not spawn or spawn.Name ~= "CorpseSpawn" then return end
-            local key = "spawn:" .. spawn:GetFullName()
-            if not corpseDebouncePass(key, 3.5) then return end
-            task.spawn(function()
-                task.wait(0.55)
-                if not spawn.Parent then return end
-                fentiPostCorpseEmbed(spawn.Name, {
-                    { name = "Being held", value = fentiSpawnAnyPartHeld(spawn) and "Yes" or "No", inline = true },
-                })
-            end)
-        end
-        local CORPSE_PART_WEBHOOK_DEBOUNCE = 3.5
-        local corpsePartsWebhookHookedRoots = {}
-        -- Immediate child of the CorpseParts folder (per corpse), not an intermediate grouping folder.
-        local function corpseImmediateChildUnder(cp, inst)
-            local cur = inst
-            while cur and cur.Parent ~= cp do
-                cur = cur.Parent
-                if not cur then
-                    return inst
-                end
-            end
-            return cur or inst
-        end
-        local function fentiLogCorpsePart(inst, debounceKey)
-            if not inst or not inst:IsA("BasePart") then return end
-            local key = debounceKey or ("part:" .. inst:GetFullName())
-            if not corpseDebouncePass(key, CORPSE_PART_WEBHOOK_DEBOUNCE) then return end
-            local titleName = inst.Name
-            local held = false
-            pcall(function()
-                _, held = fentiHolderForPart(inst)
-            end)
-            task.defer(function()
-                fentiPostCorpseEmbed(titleName, {
-                    { name = "Being held", value = held and "Yes" or "No", inline = true },
-                })
-            end)
-        end
-        -- Picked-up saints/corpse parts sit under workspace…/Entities/<username>/… (not CorpseParts).
-        local entitiesCorpseFoldersHooked = {}
-        local entitiesCorpsePickerHooked = {}
-        local function corpsePickupRootUnderPicker(pickerSlot, bp)
-            if not bp or not bp:IsA("BasePart") then return nil end
-            local cur = bp
-            while cur and cur.Parent ~= pickerSlot do
-                cur = cur.Parent
-                if not cur then return bp end
-            end
-            return cur or bp
-        end
-        local function fentiEntitiesEligibleTitle(pickerSlot, inst)
-            local cur = inst
-            while cur and cur ~= pickerSlot do
-                if (cur:IsA("Model") or cur:IsA("BasePart")) and fentiSaintsPartEligible(cur.Name) then
-                    return cur.Name
-                end
-                cur = cur.Parent
-            end
-            return nil
-        end
-        local function fentiEntitiesTryLogPickup(entitiesFolder, pickerSlot, inst)
-            if not entitiesFolder or not pickerSlot or not inst then return end
-            if pickerSlot.Parent ~= entitiesFolder then return end
-            local titleName = fentiEntitiesEligibleTitle(pickerSlot, inst)
-            if not titleName then return end
-            local bp = inst:IsA("BasePart") and inst or nil
-            if inst:IsA("Model") then
-                bp = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart")
-            end
-            if not bp then return end
-            local root = corpsePickupRootUnderPicker(pickerSlot, bp)
-            if not root then return end
-            local key = "entitiesPick:" .. tostring(pickerSlot.Name) .. ":" .. root:GetFullName()
-            if not corpseDebouncePass(key, CORPSE_PART_WEBHOOK_DEBOUNCE) then return end
-            task.defer(function()
-                fentiPostCorpseEmbed(titleName, {
-                    { name = "Being held", value = "Yes", inline = true },
-                    { name = "corspe part holder", value = tostring(pickerSlot.Name):sub(1, 80), inline = true },
-                })
-            end)
-        end
-        local function fentiHookEntityPlayerSlotForCorpse(entitiesFolder, pickerSlot)
-            if not pickerSlot or entitiesCorpsePickerHooked[pickerSlot] then return end
-            entitiesCorpsePickerHooked[pickerSlot] = true
-            table.insert(activeConnections, pickerSlot.ChildAdded:Connect(function(ch)
-                task.defer(function()
-                    task.wait(0.06)
-                    if ch.Parent ~= pickerSlot then return end
-                    if ch:IsA("Model") or ch:IsA("BasePart") then
-                        fentiEntitiesTryLogPickup(entitiesFolder, pickerSlot, ch)
-                    end
-                end)
-            end))
-            table.insert(activeConnections, pickerSlot.DescendantAdded:Connect(function(desc)
-                if desc:IsA("BasePart") then
-                    fentiEntitiesTryLogPickup(entitiesFolder, pickerSlot, desc)
-                end
-            end))
-        end
-        local function fentiHookWorkspaceEntitiesForCorpseLog(entitiesFolder)
-            if not entitiesFolder or entitiesCorpseFoldersHooked[entitiesFolder] then return end
-            entitiesCorpseFoldersHooked[entitiesFolder] = true
-            for _, ch in ipairs(entitiesFolder:GetChildren()) do
-                if ch:IsA("Folder") or ch:IsA("Model") then
-                    fentiHookEntityPlayerSlotForCorpse(entitiesFolder, ch)
-                end
-            end
-            table.insert(activeConnections, entitiesFolder.ChildAdded:Connect(function(ch)
-                if ch:IsA("Folder") or ch:IsA("Model") then
-                    fentiHookEntityPlayerSlotForCorpse(entitiesFolder, ch)
-                end
-            end))
-        end
-        local function fentiDiscoverEntitiesForCorpseLog(root)
-            if not root then return end
-            local stack = { root }
-            local i = 1
-            while i <= #stack do
-                local node = stack[i]
-                i = i + 1
-                for _, ch in ipairs(node:GetChildren()) do
-                    if ch.Name == "Entities" and (ch:IsA("Folder") or ch:IsA("Model")) then
-                        fentiHookWorkspaceEntitiesForCorpseLog(ch)
-                    elseif ch:IsA("Folder") or ch:IsA("Model") then
-                        stack[#stack + 1] = ch
-                    end
-                end
-            end
-        end
-        local corpseSpawnsWebhookHooked = {}
-        local function fentiHookCorpseSpawnsFolder(folder)
-            if not folder or corpseSpawnsWebhookHooked[folder] then return end
-            corpseSpawnsWebhookHooked[folder] = true
-            -- Only ChildAdded: do not scan existing CorpseSpawn (that fires webhooks on script load).
-            table.insert(activeConnections, folder.ChildAdded:Connect(function(ch)
-                if ch.Name == "CorpseSpawn" then fentiLogCorpseSpawn(ch) end
-            end))
-        end
-        local function fentiHookCorpsePartsLog(cp)
-            if not cp or corpsePartsWebhookHookedRoots[cp] then return end
-            corpsePartsWebhookHookedRoots[cp] = true
-            -- Top-level: new model or loose part.
-            table.insert(activeConnections, cp.ChildAdded:Connect(function(inst)
-                if inst:IsA("BasePart") then
-                    local root = corpseImmediateChildUnder(cp, inst)
-                    fentiLogCorpsePart(inst, "corpseRoot:" .. root:GetFullName())
-                elseif inst:IsA("Model") then
-                    task.defer(function()
-                        task.wait(0.2)
-                        if not inst.Parent then return end
-                        local pp = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart")
-                        if pp then
-                            fentiLogCorpsePart(pp, "corpseRoot:" .. inst:GetFullName())
-                        end
-                    end)
-                end
-            end))
-            -- Nested parts (most games parent a Model first, then stream BaseParts) — ChildAdded on folder never sees those.
-            table.insert(activeConnections, cp.DescendantAdded:Connect(function(inst)
-                if not inst:IsA("BasePart") then return end
-                if not inst:IsDescendantOf(cp) then return end
-                local root = corpseImmediateChildUnder(cp, inst)
-                fentiLogCorpsePart(inst, "corpseRoot:" .. root:GetFullName())
-            end))
-        end
-        local function fentiIsCorpseContainer(inst)
-            return inst and inst.Name == "CorpseParts" and (inst:IsA("Folder") or inst:IsA("Model"))
-        end
-        local function fentiDiscoverCorpsePartsUnder(root)
-            if not root then return end
-            local stack = { root }
-            local i = 1
-            while i <= #stack do
-                local node = stack[i]
-                i = i + 1
-                for _, ch in ipairs(node:GetChildren()) do
-                    if fentiIsCorpseContainer(ch) then
-                        fentiHookCorpsePartsLog(ch)
-                    elseif ch:IsA("Folder") or ch:IsA("Model") then
-                        stack[#stack + 1] = ch
-                    end
-                end
-            end
-        end
-        local function fentiDiscoverCorpseSpawnsUnder(root)
-            if not root then return end
-            local stack = { root }
-            local i = 1
-            while i <= #stack do
-                local node = stack[i]
-                i = i + 1
-                for _, ch in ipairs(node:GetChildren()) do
-                    if ch.Name == "CorpseSpawns" and (ch:IsA("Folder") or ch:IsA("Model")) then
-                        fentiHookCorpseSpawnsFolder(ch)
-                    elseif ch:IsA("Folder") or ch:IsA("Model") then
-                        stack[#stack + 1] = ch
-                    end
-                end
-            end
-        end
-        task.defer(function()
-            fentiDiscoverCorpseSpawnsUnder(workspace)
-            fentiDiscoverCorpsePartsUnder(workspace)
-            fentiDiscoverCorpsePartsUnder(RS)
-            fentiDiscoverEntitiesForCorpseLog(workspace)
-            table.insert(activeConnections, workspace.DescendantAdded:Connect(function(ch)
-                if ch.Name == "CorpseSpawns" and (ch:IsA("Folder") or ch:IsA("Model")) then
-                    fentiHookCorpseSpawnsFolder(ch)
-                elseif fentiIsCorpseContainer(ch) then
-                    fentiHookCorpsePartsLog(ch)
-                elseif ch.Name == "Entities" and (ch:IsA("Folder") or ch:IsA("Model")) then
-                    fentiHookWorkspaceEntitiesForCorpseLog(ch)
-                end
-            end))
-            table.insert(activeConnections, RS.DescendantAdded:Connect(function(ch)
-                if fentiIsCorpseContainer(ch) then
-                    fentiHookCorpsePartsLog(ch)
-                end
-            end))
-        end)
-    end
 
     _G.FentiFarm = FentiFarm
     end)()
@@ -7637,7 +7496,7 @@ do
                 Library:Notify("They have no character / HRP.", 3)
                 return
             end
-            smartTeleport(root.CFrame * CFrame.new(0, 0, 4))
+            _G.fentiSmartTeleport(root.CFrame * CFrame.new(0, 0, 4))
             Library:Notify("Moved near " .. sel .. ".", 2)
         end,
     })
@@ -7806,7 +7665,7 @@ do
         Library:Notify("Removed.", 2)
     end })
     FishingLeft:AddButton({ Text = "Teleport to selected preset", Func = function()
-        smartTeleport(fentiGetFishSpotCFrame()); Library:Notify("Teleported.", 2)
+        _G.fentiSmartTeleport(fentiGetFishSpotCFrame()); Library:Notify("Teleported.", 2)
     end })
     FishingLeft:AddDivider()
     FishingLeft:AddButton({ Text = "START fishing", Func = function()
@@ -7911,6 +7770,7 @@ do
             if v then
                 treeFarmHalt = false
                 task.spawn(function()
+                    rawset(_G, "fentiTreeFarmActive", true)
                     local restoreNoclip = fentiNoclipEnabled
                     local function findLumberAxe(container)
                         if not container then return nil end
@@ -8126,7 +7986,12 @@ do
                                 pcall(function() fentiSetNoclip(true) end)
                                 local firstPos = select(1, treeMiddleWorldPos(treeInst))
                                 if firstPos then
-                                    smartTeleport(CFrame.new(firstPos))
+                                    _G.fentiSmartTeleport(CFrame.new(firstPos))
+                                    pcall(function()
+                                        if type(_G.fentiEnsureLumberAxeEquipped) == "function" then
+                                            _G.fentiEnsureLumberAxeEquipped()
+                                        end
+                                    end)
                                     task.wait(0.14)
                                     refreshCharacter()
                                     treeFarmAnchorHrp()
@@ -8191,6 +8056,7 @@ do
                         end
                         task.wait(0.2)
                     end
+                    rawset(_G, "fentiTreeFarmActive", false)
                     pcall(function()
                         refreshCharacter()
                         if humanoidRootPart then humanoidRootPart.Anchored = false end
@@ -8203,6 +8069,7 @@ do
                 end)
             else
                 treeFarmHalt = true
+                rawset(_G, "fentiTreeFarmActive", false)
                 pcall(function()
                     refreshCharacter()
                     if humanoidRootPart then humanoidRootPart.Anchored = false end
@@ -8221,7 +8088,7 @@ do
         Text = "Teleport to safe zone",
         Func = function()
             refreshCharacter()
-            smartTeleport(SAFE_ZONE_POS)
+            _G.fentiSmartTeleport(SAFE_ZONE_POS)
             Library:Notify("Safe zone — moved.", 2)
         end,
     })
@@ -8328,11 +8195,19 @@ do
         end,
     })
     SaintsStyle:AddToggle("SaintsSafeAfterClaim", {
-        Text = "Safe TP after pickup",
+        Text = "Scatter TP after pickup (random hops)",
         Default = true,
         Callback = function(v)
             saintsSafeAfterClaim = v
-            Library:Notify(v and "After claim: safe hop (retries)" or "Post-claim safe TP off", 2)
+            Library:Notify(v and "After claim: fast random soft TPs (no safe zone)" or "Post-claim scatter off", 2)
+        end,
+    })
+    SaintsStyle:AddToggle("SaintsStrictWorldRoots", {
+        Text = "Block fake workspace saint parts",
+        Default = true,
+        Callback = function(v)
+            saintsStrictWorldRoots = v
+            Library:Notify(v and "Strict: only CorpseParts / spawns / Entities" or "Loose: old behavior (bait risk)", 3)
         end,
     })
     SaintsStyle:AddToggle("SaintsStealthPickup", { Text = "Slower pickup (safer)", Default = true, Callback = function(v) saintsPickupStealth = v end })
@@ -8695,9 +8570,9 @@ do
     local TPLocations = Tabs.Teleport:AddLeftGroupbox("Places", "map-pin")
     TPLocations:AddDivider()
     TPLocations:AddButton({ Text = "Fishing spot (selected preset)", Func = function()
-        smartTeleport(fentiGetFishSpotCFrame()); Library:Notify("Done.", 2)
+        _G.fentiSmartTeleport(fentiGetFishSpotCFrame()); Library:Notify("Done.", 2)
     end })
-    TPLocations:AddButton({ Text = "Safe zone", Func = function() smartTeleport(SAFE_ZONE_POS); Library:Notify("Done.", 2) end })
+    TPLocations:AddButton({ Text = "Safe zone", Func = function() _G.fentiSmartTeleport(SAFE_ZONE_POS); Library:Notify("Done.", 2) end })
     TPLocations:AddDivider()
     local function fentiResolveWorkspacePath(pathStr)
         local cur = workspace
@@ -8845,7 +8720,7 @@ do
             local getCF = map and map[sel]
             if type(getCF) == "function" then
                 local cf = getCF()
-                if typeof(cf) == "CFrame" then smartTeleport(cf); Library:Notify("Done.", 2); return end
+                if typeof(cf) == "CFrame" then _G.fentiSmartTeleport(cf); Library:Notify("Done.", 2); return end
             end
             Library:Notify("Could not resolve that place (missing or unloaded).", 4)
         end,
@@ -8897,7 +8772,7 @@ do
                     params.FilterDescendantsInstances = { character }
                     local hit = workspace:Raycast(ray.Origin, ray.Direction * 900, params)
                     if hit then
-                        smartTeleport(CFrame.new(hit.Position + Vector3.new(0, 2.5, 0)))
+                        _G.fentiSmartTeleport(CFrame.new(hit.Position + Vector3.new(0, 2.5, 0)))
                         Library:Notify("Click TP", 1.5)
                     end
                 end)
